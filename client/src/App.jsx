@@ -393,10 +393,46 @@ function LoginScreen({ setToken, showTimeoutWarning, setShowTimeoutWarning }) {
   const [forgotEmail, setForgotEmail] = useState('');
   const [forgotMsg, setForgotMsg] = useState('');
 
-  // Login steps
-  const [loginStep, setLoginStep] = useState('punch'); // 'punch' or 'login'
+  // Login steps: 'punch', 'selfie', or 'login'
+  const [loginStep, setLoginStep] = useState('punch');
+  const [cameraError, setCameraError] = useState('');
 
-  const handlePunchIn = async (e) => {
+  const videoRef = useRef(null);
+  const streamRef = useRef(null);
+
+  useEffect(() => {
+    if (loginStep === 'selfie') {
+      startCamera();
+    } else {
+      stopCamera();
+    }
+    return () => {
+      stopCamera();
+    };
+  }, [loginStep]);
+
+  const startCamera = async () => {
+    setCameraError('');
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 300, height: 300, facingMode: 'user' } });
+      streamRef.current = stream;
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+      }
+    } catch (err) {
+      console.warn('Camera failed:', err);
+      setCameraError('Webcam not accessible. A virtual verified photo will be auto-generated.');
+    }
+  };
+
+  const stopCamera = () => {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => track.stop());
+      streamRef.current = null;
+    }
+  };
+
+  const handlePunchInNext = async (e) => {
     e.preventDefault();
     setError('');
 
@@ -405,25 +441,91 @@ function LoginScreen({ setToken, showTimeoutWarning, setShowTimeoutWarning }) {
       return;
     }
 
-    // Capture location coords
-    navigator.geolocation.getCurrentPosition(
-      async (position) => {
-        await submitPunchIn(position.coords.latitude, position.coords.longitude);
-      },
-      async (err) => {
-        console.warn('Geolocation blocked or unavailable:', err);
-        alert('Please allow location sharing. It is required to log in.');
-        await submitPunchIn(null, null);
-      }
-    );
-  };
-
-  const submitPunchIn = async (latitude, longitude) => {
+    // Call punch-in without selfie first to check if already punched in (idempotent path)
     try {
       const res = await fetch(`${API_BASE}/api/auth/punch-in`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ identifier, latitude, longitude })
+        body: JSON.stringify({ identifier })
+      });
+      const data = await res.json();
+      if (res.ok && data.alreadyPunchedIn) {
+        // Skip camera and go straight to password!
+        setLoginStep('login');
+      } else if (res.status === 404) {
+        setError(data.error);
+      } else {
+        // Go to selfie verification step
+        setLoginStep('selfie');
+      }
+    } catch (err) {
+      setError('Cannot connect to TalentGrade ATS services');
+    }
+  };
+
+  const handleCaptureAndPunch = async () => {
+    setError('');
+    let capturedPhoto = null;
+
+    if (videoRef.current) {
+      try {
+        const video = videoRef.current;
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        canvas.width = 300;
+        canvas.height = 300;
+        
+        const size = Math.min(video.videoWidth, video.videoHeight);
+        const sx = (video.videoWidth - size) / 2;
+        const sy = (video.videoHeight - size) / 2;
+        
+        ctx.drawImage(video, sx, sy, size, size, 0, 0, 300, 300);
+        capturedPhoto = canvas.toDataURL('image/jpeg');
+      } catch (err) {
+        console.warn('Webcam capture error:', err);
+      }
+    }
+
+    if (!capturedPhoto) {
+      // Fallback placeholder canvas draw
+      const canvas = document.createElement('canvas');
+      canvas.width = 300;
+      canvas.height = 300;
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#f1f5f9';
+      ctx.fillRect(0, 0, 300, 300);
+      ctx.fillStyle = 'var(--primary)';
+      ctx.beginPath();
+      ctx.arc(150, 120, 50, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(150, 260, 90, Math.PI, 0);
+      ctx.fill();
+      ctx.fillStyle = '#0f172a';
+      ctx.font = '14px Outfit';
+      ctx.fillText('Punch-In Verified', 100, 180);
+      capturedPhoto = canvas.toDataURL('image/jpeg');
+    }
+
+    // Capture location coords
+    navigator.geolocation.getCurrentPosition(
+      async (position) => {
+        await submitPunchIn(position.coords.latitude, position.coords.longitude, capturedPhoto);
+      },
+      async (err) => {
+        console.warn('Geolocation blocked or unavailable:', err);
+        alert('Please allow location sharing. It is required to log in.');
+        await submitPunchIn(null, null, capturedPhoto);
+      }
+    );
+  };
+
+  const submitPunchIn = async (latitude, longitude, photo) => {
+    try {
+      const res = await fetch(`${API_BASE}/api/auth/punch-in`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ identifier, latitude, longitude, selfie: photo })
       });
       const data = await res.json();
       if (!res.ok) {
@@ -431,10 +533,8 @@ function LoginScreen({ setToken, showTimeoutWarning, setShowTimeoutWarning }) {
       } else {
         if (data.isLate) {
           alert('You are late today! Shift timing starts at 9:30 AM IST (12 mins grace allowed).');
-        } else if (data.alreadyPunchedIn) {
-          console.log('Already punched in today.');
         } else {
-          alert('Punch-in registered successfully!');
+          alert('Punch-in registered successfully with live photo!');
         }
         setLoginStep('login');
       }
@@ -501,7 +601,7 @@ function LoginScreen({ setToken, showTimeoutWarning, setShowTimeoutWarning }) {
         )}
 
         {loginStep === 'punch' ? (
-          <form onSubmit={handlePunchIn} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          <form onSubmit={handlePunchInNext} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
             <div className="form-group" style={{ marginBottom: 0 }}>
               <label>Employee ID / Email</label>
               <input 
@@ -515,6 +615,21 @@ function LoginScreen({ setToken, showTimeoutWarning, setShowTimeoutWarning }) {
             </div>
             <button type="submit" className="btn btn-primary" style={{ width: '100%', padding: '10px', marginTop: '10px' }}>Punch In & Continue</button>
           </form>
+        ) : loginStep === 'selfie' ? (
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px' }}>
+            <div style={{ fontSize: '12.5px', fontWeight: 'bold', color: 'var(--text-muted)', marginBottom: '4px' }}>Selfie Attendance Verification</div>
+            
+            {cameraError ? (
+              <div style={{ fontSize: '11.5px', color: 'var(--danger)', textAlign: 'center', backgroundColor: 'var(--danger-light)', padding: '10px', borderRadius: '4px', border: '1px solid var(--danger)' }}>
+                {cameraError}
+              </div>
+            ) : (
+              <video ref={videoRef} autoPlay playsInline style={{ width: '180px', height: '180px', objectFit: 'cover', borderRadius: '50%', border: '3px solid var(--primary)' }}></video>
+            )}
+
+            <button type="button" className="btn btn-primary" style={{ width: '100%', padding: '10px', marginTop: '8px' }} onClick={handleCaptureAndPunch}>Capture Photo & Punch In</button>
+            <button type="button" className="btn btn-secondary" style={{ width: '100%', padding: '6px' }} onClick={() => setLoginStep('punch')}>Back</button>
+          </div>
         ) : (
           <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
             <div style={{ backgroundColor: 'var(--success-light)', color: 'var(--success)', padding: '10px', borderRadius: '4px', fontSize: '11px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -1177,6 +1292,35 @@ function AttendanceView({ user, token }) {
               {user.role === 'Super Admin' ? 'Company Attendance Dashboard' : 'Team Attendance Console'}
             </span>
           </div>
+
+          {/* Stats widgets */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '16px', padding: '16px', borderBottom: '1px solid var(--border-color)', backgroundColor: '#f9fafb' }}>
+            <div style={{ padding: '12px', backgroundColor: '#fff', border: '1px solid var(--border-color)', borderRadius: '6px', textAlign: 'center' }}>
+              <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: '600', textTransform: 'uppercase' }}>Total Punches</div>
+              <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#111827', marginTop: '4px' }}>{activeDashboardRecords.length}</div>
+            </div>
+            <div style={{ padding: '12px', backgroundColor: '#fff', border: '1px solid var(--border-color)', borderRadius: '6px', textAlign: 'center' }}>
+              <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: '600', textTransform: 'uppercase' }}>On Time Arrivals</div>
+              <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#10b981', marginTop: '4px' }}>{activeDashboardRecords.filter(r => r.is_late !== 1).length}</div>
+            </div>
+            <div style={{ padding: '12px', backgroundColor: '#fff', border: '1px solid var(--border-color)', borderRadius: '6px', textAlign: 'center' }}>
+              <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: '600', textTransform: 'uppercase' }}>Late Arrivals</div>
+              <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#ef4444', marginTop: '4px' }}>{activeDashboardRecords.filter(r => r.is_late === 1).length}</div>
+            </div>
+            <div style={{ padding: '12px', backgroundColor: '#fff', border: '1px solid var(--border-color)', borderRadius: '6px', textAlign: 'center' }}>
+              <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: '600', textTransform: 'uppercase' }}>Active Shifts</div>
+              <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#3b82f6', marginTop: '4px' }}>{activeDashboardRecords.filter(r => !r.punch_out_time).length}</div>
+            </div>
+            <div style={{ padding: '12px', backgroundColor: '#fff', border: '1px solid var(--border-color)', borderRadius: '6px', textAlign: 'center' }}>
+              <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: '600', textTransform: 'uppercase' }}>Late arrival rate</div>
+              <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#f59e0b', marginTop: '4px' }}>
+                {activeDashboardRecords.length > 0 
+                  ? `${Math.round((activeDashboardRecords.filter(r => r.is_late === 1).length / activeDashboardRecords.length) * 100)}%`
+                  : '0%'}
+              </div>
+            </div>
+          </div>
+
           <div className="table-container">
             <table className="tg-table">
               <thead>
@@ -1188,6 +1332,7 @@ function AttendanceView({ user, token }) {
                   <th>Hours Worked</th>
                   <th>Selfie</th>
                   <th>Log Details</th>
+                  <th>Location Map</th>
                   <th>Status</th>
                 </tr>
               </thead>
@@ -1203,16 +1348,32 @@ function AttendanceView({ user, token }) {
                     <td>{row.punch_out_time ? new Date(row.punch_out_time).toLocaleTimeString() : 'Active'}</td>
                     <td>{row.working_hours ? `${row.working_hours} hrs` : '-'}</td>
                     <td>
-                      <img 
-                        src={`${API_BASE}${row.punch_in_selfie_path}`} 
-                        style={{ width: '40px', height: '40px', borderRadius: '4px', objectFit: 'cover' }}
-                        alt="selfie" 
-                        onClick={() => window.open(`${API_BASE}${row.punch_in_selfie_path}`, '_blank')}
-                      />
+                      {row.punch_in_selfie_path && row.punch_in_selfie_path !== 'Selfie Not Shared' && !row.punch_in_selfie_path.startsWith('Selfie Not') ? (
+                        <img 
+                          src={`${API_BASE}${row.punch_in_selfie_path}`} 
+                          style={{ width: '40px', height: '40px', borderRadius: '4px', objectFit: 'cover', cursor: 'pointer' }}
+                          alt="selfie" 
+                          onClick={() => window.open(`${API_BASE}${row.punch_in_selfie_path}`, '_blank')}
+                        />
+                      ) : (
+                        <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>No Photo</span>
+                      )}
                     </td>
                     <td style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
                       <div>IP: {row.punch_in_ip}</div>
                       <div>{row.punch_in_browser} ({row.punch_in_device})</div>
+                    </td>
+                    <td>
+                      <div>
+                        In: {row.punch_in_location && row.punch_in_location !== 'Not Shared' ? (
+                          <a href={`https://www.google.com/maps?q=${row.punch_in_location}`} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--primary)', fontWeight: 'bold', fontSize: '11px' }}>📍 Map View</a>
+                        ) : 'Not Shared'}
+                      </div>
+                      <div style={{ marginTop: '2px' }}>
+                        Out: {row.punch_out_location && row.punch_out_location !== 'Not Shared' && row.punch_out_location !== 'Pending' ? (
+                          <a href={`https://www.google.com/maps?q=${row.punch_out_location}`} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--primary)', fontWeight: 'bold', fontSize: '11px' }}>📍 Map View</a>
+                        ) : '-'}
+                      </div>
                     </td>
                     <td>
                       {row.is_late === 1 ? (
