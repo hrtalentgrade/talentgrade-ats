@@ -1,4 +1,7 @@
-"node_modules/" 
-"dist/" 
-"talentgrade.db" 
-"uploads/" 
+node_modules/
+client/node_modules/
+client/dist/
+server/node_modules/
+server/talentgrade.db
+server/uploads/
+.env
