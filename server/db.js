@@ -190,9 +190,12 @@ export const initDb = async () => {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       vacancy_id INTEGER NOT NULL,
       assigned_to INTEGER NOT NULL,
+      team_id INTEGER,
+      parent_task_id INTEGER,
       title TEXT NOT NULL,
       description TEXT,
       target_sourcing_count INTEGER DEFAULT 5,
+      target_submissions_count INTEGER DEFAULT 0,
       status TEXT CHECK(status IN ('Assigned', 'In Progress', 'Submitted', 'Completed', 'Overdue', 'Cancelled')) DEFAULT 'Assigned',
       deadline DATETIME NOT NULL,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -295,6 +298,16 @@ export const initDb = async () => {
     await run('ALTER TABLE vacancies ADD COLUMN jd_analysis TEXT');
     await run('ALTER TABLE vacancies ADD COLUMN jd_screening_questions TEXT');
     await run('ALTER TABLE vacancies ADD COLUMN jd_eligibility_checklist TEXT');
+  }
+
+  // Migration for tasks table columns
+  const taskTableInfo = await all("PRAGMA table_info(tasks)");
+  const taskColNames = taskTableInfo.map(c => c.name);
+  if (!taskColNames.includes('team_id')) {
+    console.log('Migrating tasks table schema for Team Quotas...');
+    await run('ALTER TABLE tasks ADD COLUMN team_id INTEGER');
+    await run('ALTER TABLE tasks ADD COLUMN parent_task_id INTEGER');
+    await run('ALTER TABLE tasks ADD COLUMN target_submissions_count INTEGER DEFAULT 0');
   }
 
   // Index setup

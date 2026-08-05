@@ -1206,12 +1206,32 @@ function VacanciesView({ user, token }) {
   const [jdRawText, setJdRawText] = useState('');
   const [detailTab, setDetailTab] = useState('info');
 
+  // Team assignment states
+  const [teams, setTeams] = useState([]);
+  const [assignTeamId, setAssignTeamId] = useState('');
+  const [teamQuota, setTeamQuota] = useState(5);
+
   useEffect(() => {
     fetchVacancies();
     if (user.role === 'Super Admin' || user.role === 'Team Leader') {
       fetchRecruiters();
     }
+    if (user.role === 'Super Admin') {
+      fetchTeams();
+    }
   }, []);
+
+  const fetchTeams = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/teams`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const data = await res.json();
+      setTeams(data.teams || []);
+    } catch (err) {
+      console.error(err);
+    }
+  };
 
   const fetchVacancies = async () => {
     try {
@@ -1313,6 +1333,33 @@ function VacanciesView({ user, token }) {
       }
     } catch (err) {
       alert('Failed to assign vacancy');
+    }
+  };
+
+  const handleAssignTeam = async (e) => {
+    e.preventDefault();
+    if (!assignTeamId) return;
+    try {
+      const res = await fetch(`${API_BASE}/api/vacancies/${selectedVacancy.vacancy.id}/assign-team`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ teamId: parseInt(assignTeamId), targetSubmissionsCount: teamQuota })
+      });
+      if (res.ok) {
+        setAssignTeamId('');
+        setTeamQuota(5);
+        alert('Vacancy assigned to team successfully!');
+        viewDetails(selectedVacancy.vacancy.id);
+        fetchVacancies();
+      } else {
+        const d = await res.json();
+        alert(d.error || 'Failed to assign team');
+      }
+    } catch (err) {
+      alert('Failed to assign team');
     }
   };
 
@@ -1544,6 +1591,28 @@ function VacanciesView({ user, token }) {
                     </div>
                   )}
 
+                  {user.role === 'Super Admin' && (
+                    <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '16px' }}>
+                      <h4 style={{ fontSize: '13px', fontWeight: '600', marginBottom: '8px' }}>Assign Team Sourcing Quota</h4>
+                      <form onSubmit={handleAssignTeam} style={{ display: 'flex', gap: '12px', alignItems: 'flex-end' }}>
+                        <div className="form-group" style={{ flex: '1', marginBottom: 0 }}>
+                          <label style={{ fontSize: '11px' }}>Team</label>
+                          <select className="form-control" value={assignTeamId} onChange={(e) => setAssignTeamId(e.target.value)} required>
+                            <option value="">Select Team...</option>
+                            {teams.map(t => (
+                              <option key={t.id} value={t.id}>{t.name}</option>
+                            ))}
+                          </select>
+                        </div>
+                        <div className="form-group" style={{ width: '120px', marginBottom: 0 }}>
+                          <label style={{ fontSize: '11px' }}>Submission Quota</label>
+                          <input type="number" className="form-control" min="1" max="100" value={teamQuota} onChange={(e) => setTeamQuota(parseInt(e.target.value))} required />
+                        </div>
+                        <button type="submit" className="btn btn-primary" style={{ padding: '8px 16px' }}>Assign Team</button>
+                      </form>
+                    </div>
+                  )}
+
                   {/* Assignees Table */}
                   <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '16px' }}>
                     <h4 style={{ fontSize: '13px', fontWeight: '600', marginBottom: '8px' }}>Current Assignees ({selectedVacancy.assignments.length})</h4>
@@ -1665,6 +1734,12 @@ function TasksView({ user, token }) {
   const [fileAttachment, setFileAttachment] = useState(null);
   const [updatingStatus, setUpdatingStatus] = useState(false);
 
+  // Splitting Quota States
+  const [showSplitModal, setShowSplitModal] = useState(false);
+  const [splitTask, setSplitTask] = useState(null);
+  const [recruitersList, setRecruitersList] = useState([]);
+  const [splitAssignments, setSplitAssignments] = useState({});
+
   useEffect(() => {
     fetchTasks();
   }, []);
@@ -1678,6 +1753,64 @@ function TasksView({ user, token }) {
       setTasks(data.tasks || []);
     } catch (err) {
       console.error(err);
+    }
+  };
+
+  const openSplitModal = async (task) => {
+    setSplitTask(task);
+    setShowSplitModal(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/teams/recruiters/unassigned`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const data = await res.json();
+      // Keep only Recruiters on the same team as the Team Leader (or all if Super Admin)
+      const filtered = data.users.filter(u => u.role === 'Recruiter' && (user.role === 'Super Admin' || u.team_id === user.team_id));
+      setRecruitersList(filtered);
+
+      // Populate current assignments if any
+      const initial = {};
+      filtered.forEach(r => {
+        const existingChild = task.child_tasks ? task.child_tasks.find(c => c.assigned_to === r.id) : null;
+        initial[r.id] = {
+          sourcing: existingChild ? existingChild.target_sourcing_count : 5,
+          submissions: existingChild ? existingChild.target_submissions_count : 1
+        };
+      });
+      setSplitAssignments(initial);
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleSplitSubmit = async (e) => {
+    e.preventDefault();
+    const payload = Object.entries(splitAssignments).map(([recruiterId, vals]) => ({
+      recruiterId: parseInt(recruiterId),
+      targetSourcingCount: parseInt(vals.sourcing),
+      targetSubmissionsCount: parseInt(vals.submissions)
+    })).filter(a => a.targetSourcingCount > 0 || a.targetSubmissionsCount > 0);
+
+    try {
+      const res = await fetch(`${API_BASE}/api/tasks/${splitTask.id}/split`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ assignments: payload })
+      });
+      if (res.ok) {
+        alert('Sourcing targets split successfully!');
+        setShowSplitModal(false);
+        setSplitTask(null);
+        fetchTasks();
+      } else {
+        const d = await res.json();
+        alert(d.error || 'Failed to split tasks');
+      }
+    } catch (err) {
+      alert('Failed to split tasks');
     }
   };
 
@@ -1715,11 +1848,12 @@ function TasksView({ user, token }) {
       if (res.ok) {
         setNewComment('');
         setFileAttachment(null);
-        // Reload comments
         viewTaskComments(selectedTask);
+      } else {
+        alert('Failed to post comment');
       }
     } catch (err) {
-      console.error(err);
+      alert('Failed to post comment');
     }
   };
 
@@ -1774,27 +1908,77 @@ function TasksView({ user, token }) {
                 </tr>
               </thead>
               <tbody>
-                {tasks.map(task => (
-                  <tr key={task.id} style={{ cursor: 'pointer' }} onClick={() => viewTaskComments(task)}>
-                    <td>
-                      <div style={{ fontWeight: '600' }}>{task.title}</div>
-                      <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Vacancy: {task.vacancy_title}</div>
-                    </td>
-                    <td><strong>{task.target_sourcing_count} candidates</strong></td>
-                    <td>{new Date(task.deadline).toLocaleDateString()}</td>
-                    <td>
-                      <span className={`badge ${
-                        task.status === 'Completed' ? 'badge-success' : 
-                        task.status === 'In Progress' ? 'badge-info' : 
-                        task.status === 'Overdue' ? 'badge-danger' : 
-                        task.status === 'Submitted' ? 'badge-warning' : 'badge-neutral'
-                      }`}>{task.status}</span>
-                    </td>
-                    <td>
-                      <button className="btn btn-secondary" style={{ padding: '2px 8px', fontSize: '11px' }} onClick={(e) => { e.stopPropagation(); viewTaskComments(task); }}>Feed</button>
-                    </td>
-                  </tr>
-                ))}
+                {tasks.map(task => {
+                  const isTeamTask = task.team_id && !task.parent_task_id;
+                  return (
+                    <React.Fragment key={task.id}>
+                      <tr style={{ cursor: 'pointer', backgroundColor: isTeamTask ? 'rgba(217, 37, 37, 0.01)' : '' }} onClick={() => viewTaskComments(task)}>
+                        <td>
+                          <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                            {isTeamTask ? (
+                              <span className="badge badge-primary" style={{ fontSize: '9px', padding: '2px 6px', backgroundColor: 'var(--primary-light)', color: 'var(--primary)' }}>Team Target</span>
+                            ) : (
+                              <span className="badge badge-neutral" style={{ fontSize: '9px', padding: '2px 6px' }}>Recruiter Target</span>
+                            )}
+                            <span style={{ fontWeight: '600' }}>{task.title}</span>
+                          </div>
+                          <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
+                            Vacancy: {task.vacancy_title} | {isTeamTask ? `Team: ${task.team_name || 'Unassigned'}` : `Assignee: ${task.recruiter_name}`}
+                          </div>
+                        </td>
+                        <td>
+                          {isTeamTask ? (
+                            <div>
+                              <div style={{ fontWeight: '600' }}>{task.target_submissions_count} submissions</div>
+                              <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Progress: {task.submissions_progress} approved</div>
+                            </div>
+                          ) : (
+                            <div>
+                              <div style={{ fontWeight: '600' }}>{task.target_sourcing_count} source / {task.target_submissions_count} submit</div>
+                              <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Progress: {task.sourced_progress} Sourced | {task.submissions_progress} Submitted</div>
+                            </div>
+                          )}
+                        </td>
+                        <td>{new Date(task.deadline).toLocaleDateString()}</td>
+                        <td>
+                          <span className={`badge ${
+                            task.status === 'Completed' ? 'badge-success' : 
+                            task.status === 'In Progress' ? 'badge-info' : 
+                            task.status === 'Overdue' ? 'badge-danger' : 
+                            task.status === 'Submitted' ? 'badge-warning' : 'badge-neutral'
+                          }`}>{task.status}</span>
+                        </td>
+                        <td>
+                          <div style={{ display: 'flex', gap: '6px' }} onClick={(e) => e.stopPropagation()}>
+                            <button className="btn btn-secondary" style={{ padding: '2px 8px', fontSize: '11px' }} onClick={() => viewTaskComments(task)}>Feed</button>
+                            {isTeamTask && (user.role === 'Team Leader' || user.role === 'Super Admin') && (
+                              <button className="btn btn-primary" style={{ padding: '2px 8px', fontSize: '11px', backgroundColor: 'var(--primary)', color: '#fff' }} onClick={() => openSplitModal(task)}>Split Targets</button>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                      {/* If team task is selected, show recruiters child progress details row */}
+                      {isTeamTask && task.child_tasks && task.child_tasks.length > 0 && (
+                        <tr>
+                          <td colSpan="5" style={{ padding: '8px 24px', backgroundColor: '#f9fafb' }}>
+                            <div style={{ fontSize: '11.5px', fontWeight: '700', color: 'var(--text-muted)', marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Team Sourcing Split:</div>
+                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '8px' }}>
+                              {task.child_tasks.map(child => (
+                                <div key={child.id} style={{ backgroundColor: '#fff', border: '1px solid var(--border-color)', padding: '8px 12px', borderRadius: '4px' }}>
+                                  <div style={{ fontWeight: '700', fontSize: '12px' }}>{child.recruiter_name}</div>
+                                  <div style={{ fontSize: '10.5px', color: 'var(--text-muted)', display: 'flex', justifyContent: 'space-between', marginTop: '4px' }}>
+                                    <span>Source: {child.sourced_progress} / {child.target_sourcing_count}</span>
+                                    <span>Submit: {child.submissions_progress} / {child.target_submissions_count}</span>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </React.Fragment>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -1812,6 +1996,27 @@ function TasksView({ user, token }) {
                   <h3 style={{ fontSize: '15px', fontWeight: '600' }}>{selectedTask.title}</h3>
                   <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px' }}>{selectedTask.description}</p>
                 </div>
+
+                {/* Progress bars for individual recruiter tasks */}
+                {!selectedTask.team_id && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', padding: '12px', backgroundColor: 'var(--bg-surface)', border: '1px solid var(--border-color)', borderRadius: '6px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', fontWeight: '600' }}>
+                      <span>Sourcing Target</span>
+                      <span>{selectedTask.sourced_progress} / {selectedTask.target_sourcing_count} ({Math.min(100, Math.round((selectedTask.sourced_progress / selectedTask.target_sourcing_count) * 100)) || 0}%)</span>
+                    </div>
+                    <div style={{ height: '6px', backgroundColor: '#e5e7eb', borderRadius: '3px', overflow: 'hidden' }}>
+                      <div style={{ height: '100%', width: `${Math.min(100, (selectedTask.sourced_progress / selectedTask.target_sourcing_count) * 100)}%`, backgroundColor: '#3b82f6', borderRadius: '3px' }}></div>
+                    </div>
+
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', fontWeight: '600', marginTop: '4px' }}>
+                      <span>Submission Target</span>
+                      <span>{selectedTask.submissions_progress} / {selectedTask.target_submissions_count} ({Math.min(100, Math.round((selectedTask.submissions_progress / selectedTask.target_submissions_count) * 100)) || 0}%)</span>
+                    </div>
+                    <div style={{ height: '6px', backgroundColor: '#e5e7eb', borderRadius: '3px', overflow: 'hidden' }}>
+                      <div style={{ height: '100%', width: `${Math.min(100, (selectedTask.submissions_progress / selectedTask.target_submissions_count) * 100)}%`, backgroundColor: '#10b981', borderRadius: '3px' }}></div>
+                    </div>
+                  </div>
+                )}
 
                 {/* Status Toggle buttons */}
                 <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', borderBottom: '1px solid var(--border-color)', paddingBottom: '16px' }}>
@@ -1869,6 +2074,83 @@ function TasksView({ user, token }) {
           </div>
         </div>
       </div>
+
+      {/* SPLIT QUOTAS MODAL */}
+      {showSplitModal && splitTask && (
+        <div className="modal-overlay" style={{ zIndex: 1100 }}>
+          <div className="modal-content" style={{ maxWidth: '500px' }}>
+            <div className="modal-header">
+              <h3 className="card-title">Split Targets: {splitTask.title}</h3>
+              <button className="close-btn" onClick={() => { setShowSplitModal(false); setSplitTask(null); }}><Icons.Close /></button>
+            </div>
+            <form onSubmit={handleSplitSubmit} className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+              <div style={{ fontSize: '12px', backgroundColor: 'var(--primary-light)', color: 'var(--primary)', padding: '10px', borderRadius: '4px' }}>
+                <strong>Requested Team Target:</strong> {splitTask.target_submissions_count} profiles. Allocate sourcing and submission quotas to your team's recruiters below.
+              </div>
+
+              {recruitersList.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: '20px 0', fontSize: '12px', color: 'var(--text-muted)' }}>
+                  No active recruiters found in your team. Map team users first.
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                  {recruitersList.map(rec => (
+                    <div key={rec.id} style={{ display: 'flex', gap: '12px', alignItems: 'center', borderBottom: '1px solid var(--border-color)', paddingBottom: '10px' }}>
+                      <div style={{ flex: '1' }}>
+                        <div style={{ fontWeight: '600', fontSize: '12px' }}>{rec.full_name}</div>
+                        <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>ID: {rec.employee_id}</div>
+                      </div>
+                      <div className="form-group" style={{ width: '80px', marginBottom: 0 }}>
+                        <label style={{ fontSize: '10px', display: 'block', marginBottom: '2px' }}>Sourcing</label>
+                        <input 
+                          type="number" 
+                          className="form-control" 
+                          min="0" 
+                          style={{ padding: '4px 8px', fontSize: '12px' }}
+                          value={splitAssignments[rec.id]?.sourcing || 0}
+                          onChange={(e) => {
+                            const updated = { ...splitAssignments };
+                            updated[rec.id] = { ...updated[rec.id], sourcing: parseInt(e.target.value) || 0 };
+                            setSplitAssignments(updated);
+                          }}
+                        />
+                      </div>
+                      <div className="form-group" style={{ width: '80px', marginBottom: 0 }}>
+                        <label style={{ fontSize: '10px', display: 'block', marginBottom: '2px' }}>Submissions</label>
+                        <input 
+                          type="number" 
+                          className="form-control" 
+                          min="0" 
+                          style={{ padding: '4px 8px', fontSize: '12px' }}
+                          value={splitAssignments[rec.id]?.submissions || 0}
+                          onChange={(e) => {
+                            const updated = { ...splitAssignments };
+                            updated[rec.id] = { ...updated[rec.id], submissions: parseInt(e.target.value) || 0 };
+                            setSplitAssignments(updated);
+                          }}
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Aggregated details check */}
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', fontWeight: 'bold', borderTop: '1px solid var(--border-color)', paddingTop: '10px' }}>
+                <span>Allocated submissions:</span>
+                <span style={{ color: Object.values(splitAssignments).reduce((a, b) => a + (b.submissions || 0), 0) >= splitTask.target_submissions_count ? 'var(--success)' : 'var(--primary)' }}>
+                  {Object.values(splitAssignments).reduce((a, b) => a + (b.submissions || 0), 0)} / {splitTask.target_submissions_count} profiles
+                </span>
+              </div>
+
+              <div style={{ display: 'flex', gap: '10px', marginTop: '10px' }}>
+                <button type="button" className="btn btn-secondary" style={{ flex: '1' }} onClick={() => { setShowSplitModal(false); setSplitTask(null); }}>Cancel</button>
+                <button type="submit" className="btn btn-primary" style={{ flex: '1' }} disabled={recruitersList.length === 0}>Save Allocations</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </>
   );
 }

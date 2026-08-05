@@ -432,7 +432,7 @@ app.post('/api/teams', authenticateToken, requireRole(['Super Admin']), async (r
   }
 });
 
-app.get('/api/teams/recruiters/unassigned', authenticateToken, requireRole(['Super Admin']), async (req, res) => {
+app.get('/api/teams/recruiters/unassigned', authenticateToken, requireRole(['Super Admin', 'Team Leader']), async (req, res) => {
   try {
     const users = await all(`
       SELECT id, full_name, employee_id, role, team_id
@@ -657,6 +657,136 @@ app.post('/api/vacancies/:id/assign', authenticateToken, requireRole(['Super Adm
   }
 });
 
+app.post('/api/vacancies/:id/assign-team', authenticateToken, requireRole(['Super Admin']), async (req, res) => {
+  const { id } = req.params; // vacancy_id
+  const { teamId, targetSubmissionsCount } = req.body;
+
+  if (!teamId || !targetSubmissionsCount) {
+    return res.status(400).json({ error: 'teamId and targetSubmissionsCount are required' });
+  }
+
+  try {
+    // 1. Fetch team details
+    const team = await get('SELECT name, leader_id FROM teams WHERE id = ?', [teamId]);
+    if (!team) return res.status(404).json({ error: 'Team not found' });
+    if (!team.leader_id) {
+      return res.status(400).json({ error: 'The selected team must have an assigned Team Leader first' });
+    }
+
+    // 2. Fetch vacancy details
+    const vacancy = await get('SELECT title, deadline FROM vacancies WHERE id = ?', [id]);
+    if (!vacancy) return res.status(404).json({ error: 'Vacancy not found' });
+
+    // 3. Insert or Update Team Sourcing Task
+    const existing = await get('SELECT id FROM tasks WHERE vacancy_id = ? AND team_id = ? AND parent_task_id IS NULL', [id, teamId]);
+    let taskId;
+
+    if (existing) {
+      taskId = existing.id;
+      await run(`
+        UPDATE tasks 
+        SET target_submissions_count = ?, deadline = ?, assigned_to = ?
+        WHERE id = ?
+      `, [targetSubmissionsCount, vacancy.deadline, team.leader_id, taskId]);
+    } else {
+      const result = await run(`
+        INSERT INTO tasks (
+          vacancy_id, assigned_to, team_id, title, description,
+          target_submissions_count, target_sourcing_count, status, deadline
+        ) VALUES (?, ?, ?, ?, ?, ?, 0, 'Assigned', ?)
+      `, [
+        id,
+        team.leader_id,
+        teamId,
+        `Team Target: ${vacancy.title}`,
+        `Sourcing allocation for ${team.name}. Split sourcing and submission targets among recruiters.`,
+        targetSubmissionsCount,
+        vacancy.deadline
+      ]);
+      taskId = result.id;
+    }
+
+    // 4. Send notification to Team Leader
+    await createNotification(
+      team.leader_id,
+      'New Team Sourcing Allocation',
+      `Super Admin assigned vacancy "${vacancy.title}" to your team. Target quota: ${targetSubmissionsCount} profiles.`
+    );
+
+    await logActivity(req.user.id, 'Assign Vacancy Team', `Assigned vacancy ${id} to team ${teamId} (Target: ${targetSubmissionsCount})`, '');
+
+    res.json({ message: 'Vacancy assigned to team successfully', taskId });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to assign vacancy to team' });
+  }
+});
+
+app.post('/api/tasks/:id/split', authenticateToken, requireRole(['Team Leader', 'Super Admin']), async (req, res) => {
+  const { id } = req.params; // parent task_id
+  const { assignments } = req.body; // array of { recruiterId, targetSourcingCount, targetSubmissionsCount }
+
+  if (!Array.isArray(assignments)) {
+    return res.status(400).json({ error: 'assignments must be an array' });
+  }
+
+  try {
+    // 1. Fetch parent task
+    const parentTask = await get('SELECT * FROM tasks WHERE id = ?', [id]);
+    if (!parentTask) return res.status(404).json({ error: 'Team task not found' });
+    if (!parentTask.team_id) {
+      return res.status(400).json({ error: 'This task is not a Team Task allocation and cannot be split' });
+    }
+
+    // 2. Access control check for Team Leader
+    if (req.user.role === 'Team Leader' && parentTask.team_id !== req.user.team_id) {
+      return res.status(403).json({ error: 'You can only split tasks assigned to your own team' });
+    }
+
+    const vacancy = await get('SELECT title FROM vacancies WHERE id = ?', [parentTask.vacancy_id]);
+
+    // 3. Run splitting inside database
+    for (const assign of assignments) {
+      const { recruiterId, targetSourcingCount, targetSubmissionsCount } = assign;
+      if (!recruiterId) continue;
+
+      // Make splitting idempotent: delete any pre-existing child task for this recruiter under this parent
+      await run('DELETE FROM tasks WHERE parent_task_id = ? AND assigned_to = ?', [id, recruiterId]);
+
+      // Create new child task
+      await run(`
+        INSERT INTO tasks (
+          vacancy_id, assigned_to, parent_task_id, title, description,
+          target_sourcing_count, target_submissions_count, status, deadline
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'Assigned', ?)
+      `, [
+        parentTask.vacancy_id,
+        recruiterId,
+        id,
+        `Sourcing Target: ${vacancy.title}`,
+        `Split target from your Team Leader. Source ${targetSourcingCount} profiles and get ${targetSubmissionsCount} approved submissions.`,
+        targetSourcingCount,
+        targetSubmissionsCount,
+        parentTask.deadline
+      ]);
+
+      // Send notification to recruiter
+      await createNotification(
+        recruiterId,
+        'Sourcing Quota Allocated',
+        `Your TL has split Sourcing Targets for "${vacancy.title}": Sourcing: ${targetSourcingCount}, Submissions: ${targetSubmissionsCount}.`
+      );
+    }
+
+    await logActivity(req.user.id, 'Split Task', `Split team task ${id} among ${assignments.length} recruiters`, '');
+
+    res.json({ message: 'Team targets split successfully among recruiters' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to split task targets' });
+  }
+});
+
 app.put('/api/vacancies/:id/status', authenticateToken, requireRole(['Super Admin', 'Team Leader']), async (req, res) => {
   const { id } = req.params;
   const { status } = req.body;
@@ -685,21 +815,23 @@ app.get('/api/tasks', authenticateToken, async (req, res) => {
     let list = [];
     if (role === 'Super Admin') {
       list = await all(`
-        SELECT t.*, u.full_name as recruiter_name, v.title as vacancy_title
+        SELECT t.*, u.full_name as recruiter_name, v.title as vacancy_title, tm.name as team_name
         FROM tasks t
-        JOIN users u ON t.assigned_to = u.id
+        LEFT JOIN users u ON t.assigned_to = u.id
+        LEFT JOIN teams tm ON t.team_id = tm.id
         JOIN vacancies v ON t.vacancy_id = v.id
         ORDER BY t.deadline ASC
       `);
     } else if (role === 'Team Leader') {
       list = await all(`
-        SELECT t.*, u.full_name as recruiter_name, v.title as vacancy_title
+        SELECT t.*, u.full_name as recruiter_name, v.title as vacancy_title, tm.name as team_name
         FROM tasks t
-        JOIN users u ON t.assigned_to = u.id
+        LEFT JOIN users u ON t.assigned_to = u.id
+        LEFT JOIN teams tm ON t.team_id = tm.id
         JOIN vacancies v ON t.vacancy_id = v.id
-        WHERE u.team_id = ? OR u.id = ?
+        WHERE t.team_id = ? OR u.team_id = ? OR t.assigned_to = ?
         ORDER BY t.deadline ASC
-      `, [team_id, id]);
+      `, [team_id, team_id, id]);
     } else {
       list = await all(`
         SELECT t.*, u.full_name as recruiter_name, v.title as vacancy_title
@@ -710,8 +842,95 @@ app.get('/api/tasks', authenticateToken, async (req, res) => {
         ORDER BY t.deadline ASC
       `, [id]);
     }
-    res.json({ tasks: list });
+
+    // Populate live statistics for each task
+    const enrichedTasks = [];
+    for (const t of list) {
+      let sourcedProgress = 0;
+      let submissionsProgress = 0;
+
+      if (t.team_id && !t.parent_task_id) {
+        // It's a Team Task: aggregate progress for all recruiters in the team
+        const sourced = await get(`
+          SELECT COUNT(*) as cnt 
+          FROM candidates c 
+          JOIN users u ON c.assigned_recruiter_id = u.id 
+          WHERE u.team_id = ? AND c.vacancy_id = ?
+        `, [t.team_id, t.vacancy_id]);
+        sourcedProgress = sourced.cnt;
+
+        const submitted = await get(`
+          SELECT COUNT(*) as cnt 
+          FROM candidates c 
+          JOIN users u ON c.assigned_recruiter_id = u.id 
+          WHERE u.team_id = ? AND c.vacancy_id = ? AND c.pipeline_status NOT IN ('New', 'Screening')
+        `, [t.team_id, t.vacancy_id]);
+        submissionsProgress = submitted.cnt;
+
+        // Fetch child tasks split for recruiters (useful for TL and Super Admin views)
+        const childTasks = await all(`
+          SELECT t.*, u.full_name as recruiter_name
+          FROM tasks t
+          JOIN users u ON t.assigned_to = u.id
+          WHERE t.parent_task_id = ?
+        `, [t.id]);
+
+        const enrichedChildTasks = [];
+        for (const child of childTasks) {
+          const childSourced = await get(`
+            SELECT COUNT(*) as cnt FROM candidates 
+            WHERE assigned_recruiter_id = ? AND vacancy_id = ?
+          `, [child.assigned_to, child.vacancy_id]);
+          
+          const childSubmitted = await get(`
+            SELECT COUNT(*) as cnt FROM candidates 
+            WHERE assigned_recruiter_id = ? AND vacancy_id = ? AND pipeline_status NOT IN ('New', 'Screening')
+          `, [child.assigned_to, child.vacancy_id]);
+
+          // Auto-mark completed if targets are met!
+          if (childSourced.cnt >= child.target_sourcing_count && childSubmitted.cnt >= child.target_submissions_count && child.status === 'Assigned') {
+            await run("UPDATE tasks SET status = 'Completed' WHERE id = ?", [child.id]);
+            child.status = 'Completed';
+          }
+
+          enrichedChildTasks.push({
+            ...child,
+            sourced_progress: childSourced.cnt,
+            submissions_progress: childSubmitted.cnt
+          });
+        }
+        t.child_tasks = enrichedChildTasks;
+      } else {
+        // It's an individual Recruiter Task
+        const sourced = await get(`
+          SELECT COUNT(*) as cnt FROM candidates 
+          WHERE assigned_recruiter_id = ? AND vacancy_id = ?
+        `, [t.assigned_to, t.vacancy_id]);
+        sourcedProgress = sourced.cnt;
+
+        const submitted = await get(`
+          SELECT COUNT(*) as cnt FROM candidates 
+          WHERE assigned_recruiter_id = ? AND vacancy_id = ? AND pipeline_status NOT IN ('New', 'Screening')
+        `, [t.assigned_to, t.vacancy_id]);
+        submissionsProgress = submitted.cnt;
+
+        // Auto-mark completed if targets are met!
+        if (sourcedProgress >= t.target_sourcing_count && submissionsProgress >= t.target_submissions_count && t.status === 'Assigned') {
+          await run("UPDATE tasks SET status = 'Completed' WHERE id = ?", [t.id]);
+          t.status = 'Completed';
+        }
+      }
+
+      enrichedTasks.push({
+        ...t,
+        sourced_progress: sourcedProgress,
+        submissions_progress: submissionsProgress
+      });
+    }
+
+    res.json({ tasks: enrichedTasks });
   } catch (err) {
+    console.error(err);
     res.status(500).json({ error: 'Failed to fetch tasks' });
   }
 });
