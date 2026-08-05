@@ -1,0 +1,11 @@
+{
+  "name": "talentgrade-ats",
+  "version": "1.0.0",
+  "description": "TalentGrade Recruitment Operations Platform Root Workspace",
+  "type": "module",
+  "scripts": {
+    "start": "node server/index.js",
+    "install:all": "npm --prefix server install && npm --prefix client install",
+    "build:client": "npm --prefix client run build"
+  }
+}
