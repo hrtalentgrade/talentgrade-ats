@@ -393,6 +393,56 @@ function LoginScreen({ setToken, showTimeoutWarning, setShowTimeoutWarning }) {
   const [forgotEmail, setForgotEmail] = useState('');
   const [forgotMsg, setForgotMsg] = useState('');
 
+  // Login steps
+  const [loginStep, setLoginStep] = useState('punch'); // 'punch' or 'login'
+
+  const handlePunchIn = async (e) => {
+    e.preventDefault();
+    setError('');
+
+    if (!identifier.trim()) {
+      setError('Employee ID or Email address is required.');
+      return;
+    }
+
+    // Capture location coords
+    navigator.geolocation.getCurrentPosition(
+      async (position) => {
+        await submitPunchIn(position.coords.latitude, position.coords.longitude);
+      },
+      async (err) => {
+        console.warn('Geolocation blocked or unavailable:', err);
+        alert('Please allow location sharing. It is required to log in.');
+        await submitPunchIn(null, null);
+      }
+    );
+  };
+
+  const submitPunchIn = async (latitude, longitude) => {
+    try {
+      const res = await fetch(`${API_BASE}/api/auth/punch-in`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ identifier, latitude, longitude })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error || 'Failed to register punch-in');
+      } else {
+        if (data.isLate) {
+          alert('You are late today! Shift timing starts at 9:30 AM IST (12 mins grace allowed).');
+        } else if (data.alreadyPunchedIn) {
+          console.log('Already punched in today.');
+        } else {
+          alert('Punch-in registered successfully!');
+        }
+        setLoginStep('login');
+      }
+    } catch (err) {
+      setError('Cannot connect to TalentGrade ATS services for punch-in');
+    }
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
@@ -450,40 +500,50 @@ function LoginScreen({ setToken, showTimeoutWarning, setShowTimeoutWarning }) {
           </div>
         )}
 
-        <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-          <div className="form-group">
-            <label>Employee ID / Email</label>
-            <input 
-              type="text" 
-              className="form-control" 
-              placeholder="e.g., TG1001 or admin@tgats.com" 
-              value={identifier}
-              onChange={(e) => setIdentifier(e.target.value)}
-              required 
-            />
-          </div>
+        {loginStep === 'punch' ? (
+          <form onSubmit={handlePunchIn} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            <div className="form-group" style={{ marginBottom: 0 }}>
+              <label>Employee ID / Email</label>
+              <input 
+                type="text" 
+                className="form-control" 
+                placeholder="e.g., TG1001 or admin@tgats.com" 
+                value={identifier}
+                onChange={(e) => setIdentifier(e.target.value)}
+                required 
+              />
+            </div>
+            <button type="submit" className="btn btn-primary" style={{ width: '100%', padding: '10px', marginTop: '10px' }}>Punch In & Continue</button>
+          </form>
+        ) : (
+          <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            <div style={{ backgroundColor: 'var(--success-light)', color: 'var(--success)', padding: '10px', borderRadius: '4px', fontSize: '11px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span>Punched in: <strong>{identifier}</strong></span>
+              <button type="button" className="btn btn-secondary" style={{ padding: '2px 6px', fontSize: '10px', minWidth: 'auto' }} onClick={() => setLoginStep('punch')}>Edit</button>
+            </div>
 
-          <div className="form-group">
-            <label>Password</label>
-            <input 
-              type="password" 
-              className="form-control" 
-              placeholder="••••••••" 
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required 
-            />
-          </div>
+            <div className="form-group" style={{ marginBottom: 0 }}>
+              <label>Password</label>
+              <input 
+                type="password" 
+                className="form-control" 
+                placeholder="••••••••" 
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required 
+              />
+            </div>
 
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '12px' }}>
-            <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer' }}>
-              <input type="checkbox" checked={rememberMe} onChange={(e) => setRememberMe(e.target.checked)} /> Remember Me
-            </label>
-            <span style={{ color: 'var(--primary)', cursor: 'pointer', fontWeight: '500' }} onClick={() => setShowForgotModal(true)}>Forgot Password?</span>
-          </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '12px' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer' }}>
+                <input type="checkbox" checked={rememberMe} onChange={(e) => setRememberMe(e.target.checked)} /> Remember Me
+              </label>
+              <span style={{ color: 'var(--primary)', cursor: 'pointer', fontWeight: '500' }} onClick={() => setShowForgotModal(true)}>Forgot Password?</span>
+            </div>
 
-          <button type="submit" className="btn btn-primary" style={{ width: '100%', padding: '10px' }}>Log In</button>
-        </form>
+            <button type="submit" className="btn btn-primary" style={{ width: '100%', padding: '10px' }}>Log In</button>
+          </form>
+        )}
 
         <div style={{ fontSize: '11px', textAlign: 'center', color: 'var(--text-muted)', borderTop: '1px solid var(--border-color)', paddingTop: '16px' }}>
           Default Admin: admin@tgats.com / admin@123
@@ -942,15 +1002,46 @@ function AttendanceView({ user, token }) {
   };
 
   const handlePunchOut = async () => {
-    if (!confirm('Are you sure you want to Punch Out?')) return;
+    // Check if early punch-out (before 6:30 PM IST)
+    const now = new Date();
+    const utc = now.getTime() + now.getTimezoneOffset() * 60000;
+    const ist = new Date(utc + (3600000 * 5.5)); // IST UTC+5.5
+    const hour = ist.getHours();
+    const minutes = ist.getMinutes();
+    const isEarly = (hour < 18) || (hour === 18 && minutes < 30);
+
+    const message = isEarly 
+      ? 'You are punching out early today! Timing is from 9:30 AM to 6:30 PM IST. Are you sure you want to Punch Out?'
+      : 'Are you sure you want to Punch Out?';
+
+    if (!confirm(message)) return;
+
+    // Capture location on punch-out
+    navigator.geolocation.getCurrentPosition(
+      async (position) => {
+        await performPunchOut(position.coords.latitude, position.coords.longitude);
+      },
+      async (err) => {
+        console.warn('Geolocation blocked or failed on punch-out:', err);
+        await performPunchOut(null, null);
+      }
+    );
+  };
+
+  const performPunchOut = async (latitude, longitude) => {
     try {
       const res = await fetch(`${API_BASE}/api/attendance/punch-out`, {
         method: 'POST',
-        headers: { 'Authorization': `Bearer ${token}` }
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}` 
+        },
+        body: JSON.stringify({ latitude, longitude })
       });
       const data = await res.json();
       if (!res.ok) alert(data.error);
       else {
+        alert(data.message || 'Punched out successfully');
         fetchTodayRecord();
         fetchHistory();
         if (user.role === 'Super Admin' || user.role === 'Team Leader') fetchDashboardData();

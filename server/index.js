@@ -111,6 +111,27 @@ function parseUserAgent(ua) {
   return { browser, device };
 }
 
+function getIstTime() {
+  const now = new Date();
+  const options = { timeZone: 'Asia/Kolkata', hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' };
+  const formatter = new Intl.DateTimeFormat('en-US', options);
+  const parts = formatter.formatToParts(now);
+  const hour = parseInt(parts.find(p => p.type === 'hour').value);
+  const minute = parseInt(parts.find(p => p.type === 'minute').value);
+  const second = parseInt(parts.find(p => p.type === 'second').value);
+  
+  // Date formatting options
+  const dateOptions = { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit' };
+  const dateFormatter = new Intl.DateTimeFormat('en-US', dateOptions);
+  const dateParts = dateFormatter.formatToParts(now);
+  const year = dateParts.find(p => p.type === 'year').value;
+  const month = dateParts.find(p => p.type === 'month').value;
+  const day = dateParts.find(p => p.type === 'day').value;
+  const dateStr = `${year}-${month}-${day}`;
+
+  return { hour, minute, second, dateStr };
+}
+
 // ==========================================
 // 1. AUTHENTICATION ENDPOINTS
 // ==========================================
@@ -220,31 +241,93 @@ app.post('/api/auth/forgot-password', async (req, res) => {
   }
 });
 
+app.post('/api/auth/punch-in', async (req, res) => {
+  const { identifier, latitude, longitude } = req.body;
+
+  if (!identifier) {
+    return res.status(400).json({ error: 'Employee ID or Email is required' });
+  }
+
+  try {
+    const user = await get('SELECT id, full_name, role FROM users WHERE email = ? OR employee_id = ?', [identifier, identifier]);
+    if (!user) {
+      return res.status(404).json({ error: 'Employee not found. Please check your ID/Email.' });
+    }
+
+    const ist = getIstTime();
+    const existing = await get('SELECT id FROM attendance WHERE user_id = ? AND attendance_date = ?', [user.id, ist.dateStr]);
+    if (existing) {
+      return res.json({ 
+        alreadyPunchedIn: true, 
+        message: 'Already punched in for today.', 
+        user: { id: user.id, full_name: user.full_name, role: user.role } 
+      });
+    }
+
+    // Threshold: Late if after 09:42 AM IST
+    const totalMinutesInIst = ist.hour * 60 + ist.minute;
+    const limitMinutes = 9 * 60 + 42; // 9:42 AM
+    const isLate = totalMinutesInIst > limitMinutes ? 1 : 0;
+
+    const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress || '';
+    const { browser, device } = parseUserAgent(req.headers['user-agent']);
+    const locationStr = latitude && longitude ? `${latitude}, ${longitude}` : 'Not Shared';
+
+    await run(`
+      INSERT INTO attendance (
+        user_id, attendance_date, punch_in_time, punch_in_selfie_path,
+        punch_in_ip, punch_in_browser, punch_in_device, punch_in_location, is_late
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, [
+      user.id,
+      ist.dateStr,
+      new Date().toISOString(),
+      'Selfie Not Taken (Login Punch-In)',
+      clientIp,
+      browser,
+      device,
+      locationStr,
+      isLate
+    ]);
+
+    await logActivity(user.id, 'Attendance Punch-In', `Punched in via login screen (IST: ${ist.hour}:${ist.minute})`, clientIp);
+
+    res.json({
+      message: 'Punch-in successful!',
+      isLate: isLate === 1,
+      user: { id: user.id, full_name: user.full_name, role: user.role }
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to complete initial punch-in' });
+  }
+});
+
 // ==========================================
 // 2. ATTENDANCE ENDPOINTS
 // ==========================================
 
 app.post('/api/attendance/punch-in', authenticateToken, async (req, res) => {
-  const { selfie } = req.body; // Base64 selfie
+  const { selfie, latitude, longitude } = req.body;
   if (!selfie) return res.status(400).json({ error: 'Selfie image is required for punch-in' });
 
   const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress || '';
   const { browser, device } = parseUserAgent(req.headers['user-agent']);
 
   const today = new Date();
-  const dateStr = today.toISOString().split('T')[0];
   const timeStr = today.toISOString();
+  const ist = getIstTime();
 
-  // Threshold: Late if after 09:30 AM
-  const checkLate = new Date();
-  checkLate.setHours(9, 30, 0, 0);
-  const isLate = today > checkLate ? 1 : 0;
+  // Threshold: Late if after 09:42 AM IST
+  const totalMinutesInIst = ist.hour * 60 + ist.minute;
+  const limitMinutes = 9 * 60 + 42; // 9:42 AM
+  const isLate = totalMinutesInIst > limitMinutes ? 1 : 0;
 
   try {
     // Check if already punched in today
     const existing = await get(
       'SELECT id FROM attendance WHERE user_id = ? AND attendance_date = ?',
-      [req.user.id, dateStr]
+      [req.user.id, ist.dateStr]
     );
 
     if (existing) {
@@ -263,11 +346,12 @@ app.post('/api/attendance/punch-in', authenticateToken, async (req, res) => {
 
     fs.writeFileSync(filePath, imageBuffer);
     const dbSelfiePath = `/uploads/selfies/${filename}`;
+    const locationStr = latitude && longitude ? `${latitude}, ${longitude}` : 'Not Shared';
 
     const result = await run(`
-      INSERT INTO attendance (user_id, attendance_date, punch_in_time, punch_in_selfie_path, punch_in_ip, punch_in_browser, punch_in_device, is_late)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `, [req.user.id, dateStr, timeStr, dbSelfiePath, clientIp, browser, device, isLate]);
+      INSERT INTO attendance (user_id, attendance_date, punch_in_time, punch_in_selfie_path, punch_in_ip, punch_in_browser, punch_in_device, punch_in_location, is_late)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, [req.user.id, ist.dateStr, timeStr, dbSelfiePath, clientIp, browser, device, locationStr, isLate]);
 
     await logActivity(req.user.id, 'Attendance Punch-In', `Punched in at ${today.toLocaleTimeString()}`, clientIp);
 
@@ -284,14 +368,15 @@ app.post('/api/attendance/punch-in', authenticateToken, async (req, res) => {
 });
 
 app.post('/api/attendance/punch-out', authenticateToken, async (req, res) => {
+  const { latitude, longitude } = req.body;
   const today = new Date();
-  const dateStr = today.toISOString().split('T')[0];
   const timeStr = today.toISOString();
+  const ist = getIstTime();
 
   try {
     const record = await get(
       'SELECT * FROM attendance WHERE user_id = ? AND attendance_date = ?',
-      [req.user.id, dateStr]
+      [req.user.id, ist.dateStr]
     );
 
     if (!record) {
@@ -308,18 +393,25 @@ app.post('/api/attendance/punch-out', authenticateToken, async (req, res) => {
 
     // Overtime: working hours greater than 8.0 hours
     const overtimeHours = workingHours > 8 ? parseFloat((workingHours - 8).toFixed(2)) : 0;
+    const locationStr = latitude && longitude ? `${latitude}, ${longitude}` : 'Not Shared';
+
+    // Check if early punch-out (before 6:30 PM IST)
+    const totalMinutesInIst = ist.hour * 60 + ist.minute;
+    const limitMinutes = 18 * 60 + 30; // 18:30 IST
+    const isEarly = totalMinutesInIst < limitMinutes;
 
     await run(`
       UPDATE attendance 
-      SET punch_out_time = ?, working_hours = ?, overtime_hours = ?
+      SET punch_out_time = ?, working_hours = ?, overtime_hours = ?, punch_out_location = ?
       WHERE id = ?
-    `, [timeStr, workingHours, overtimeHours, record.id]);
+    `, [timeStr, workingHours, overtimeHours, locationStr, record.id]);
 
     const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress || '';
-    await logActivity(req.user.id, 'Attendance Punch-Out', `Punched out with ${workingHours} hrs`, clientIp);
+    await logActivity(req.user.id, 'Attendance Punch-Out', `Punched out with ${workingHours} hrs (IST: ${ist.hour}:${ist.minute})`, clientIp);
 
     res.json({
-      message: 'Punch-out successful',
+      message: isEarly ? 'Punch-out successful (Early Punch-Out recorded)' : 'Punch-out successful',
+      isEarlyPunchOut: isEarly,
       punchOutTime: timeStr,
       workingHours,
       overtimeHours

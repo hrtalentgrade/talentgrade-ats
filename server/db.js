@@ -172,10 +172,12 @@ export const initDb = async () => {
       attendance_date DATE NOT NULL,
       punch_in_time DATETIME NOT NULL,
       punch_out_time DATETIME,
-      punch_in_selfie_path TEXT NOT NULL,
+      punch_in_selfie_path TEXT,
       punch_in_ip TEXT,
       punch_in_browser TEXT,
       punch_in_device TEXT,
+      punch_in_location TEXT,
+      punch_out_location TEXT,
       working_hours REAL DEFAULT 0,
       is_late INTEGER DEFAULT 0, -- Boolean 0 or 1
       overtime_hours REAL DEFAULT 0,
@@ -308,6 +310,15 @@ export const initDb = async () => {
     await run('ALTER TABLE tasks ADD COLUMN team_id INTEGER');
     await run('ALTER TABLE tasks ADD COLUMN parent_task_id INTEGER');
     await run('ALTER TABLE tasks ADD COLUMN target_submissions_count INTEGER DEFAULT 0');
+  }
+
+  // Migration for attendance table columns
+  const attTableInfo = await all("PRAGMA table_info(attendance)");
+  const attColNames = attTableInfo.map(c => c.name);
+  if (!attColNames.includes('punch_in_location')) {
+    console.log('Migrating attendance table schema for Location details...');
+    await run('ALTER TABLE attendance ADD COLUMN punch_in_location TEXT');
+    await run('ALTER TABLE attendance ADD COLUMN punch_out_location TEXT');
   }
 
   // Index setup
