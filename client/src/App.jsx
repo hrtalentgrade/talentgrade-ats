@@ -38,6 +38,7 @@ function App() {
   const [showSearchModal, setShowSearchModal] = useState(false);
   const [showTimeoutWarning, setShowTimeoutWarning] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   // Inactivity tracking
   const lastActiveRef = useRef(Date.now());
@@ -166,41 +167,44 @@ function App() {
   return (
     <div className="app-container">
       {/* SIDEBAR NAVIGATION */}
-      <aside className="sidebar">
+      <aside className={`sidebar ${mobileMenuOpen ? 'open' : ''}`}>
         <div className="sidebar-header">
           <div className="logo-icon">TG</div>
           <div className="logo-text">TalentGrade <span>ATS</span></div>
+          <button className="sidebar-mobile-close" onClick={() => setMobileMenuOpen(false)}>
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" style={{ width: '20px', height: '20px' }}><path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" /></svg>
+          </button>
         </div>
         
         <nav className="sidebar-nav">
-          <div className={`nav-item ${currentTab === 'dashboard' ? 'active' : ''}`} onClick={() => setCurrentTab('dashboard')}>
+          <div className={`nav-item ${currentTab === 'dashboard' ? 'active' : ''}`} onClick={() => { setCurrentTab('dashboard'); setMobileMenuOpen(false); }}>
             <Icons.Dashboard /> Dashboard
           </div>
-          <div className={`nav-item ${currentTab === 'attendance' ? 'active' : ''}`} onClick={() => setCurrentTab('attendance')}>
+          <div className={`nav-item ${currentTab === 'attendance' ? 'active' : ''}`} onClick={() => { setCurrentTab('attendance'); setMobileMenuOpen(false); }}>
             <Icons.Attendance /> Attendance
           </div>
-          <div className={`nav-item ${currentTab === 'vacancies' ? 'active' : ''}`} onClick={() => setCurrentTab('vacancies')}>
+          <div className={`nav-item ${currentTab === 'vacancies' ? 'active' : ''}`} onClick={() => { setCurrentTab('vacancies'); setMobileMenuOpen(false); }}>
             <Icons.Vacancies /> Vacancies
           </div>
-          <div className={`nav-item ${currentTab === 'tasks' ? 'active' : ''}`} onClick={() => setCurrentTab('tasks')}>
+          <div className={`nav-item ${currentTab === 'tasks' ? 'active' : ''}`} onClick={() => { setCurrentTab('tasks'); setMobileMenuOpen(false); }}>
             <Icons.Tasks /> Task Board
           </div>
-          <div className={`nav-item ${currentTab === 'candidates' ? 'active' : ''}`} onClick={() => setCurrentTab('candidates')}>
+          <div className={`nav-item ${currentTab === 'candidates' ? 'active' : ''}`} onClick={() => { setCurrentTab('candidates'); setMobileMenuOpen(false); }}>
             <Icons.Candidates /> Candidates
           </div>
-          <div className={`nav-item ${currentTab === 'vendors' ? 'active' : ''}`} onClick={() => setCurrentTab('vendors')}>
+          <div className={`nav-item ${currentTab === 'vendors' ? 'active' : ''}`} onClick={() => { setCurrentTab('vendors'); setMobileMenuOpen(false); }}>
             <Icons.Vendors /> B2B Partners
           </div>
-          <div className={`nav-item ${currentTab === 'reports' ? 'active' : ''}`} onClick={() => setCurrentTab('reports')}>
+          <div className={`nav-item ${currentTab === 'reports' ? 'active' : ''}`} onClick={() => { setCurrentTab('reports'); setMobileMenuOpen(false); }}>
             <Icons.Reports /> Reports
           </div>
           {user.role === 'Super Admin' && (
-            <div className={`nav-item ${currentTab === 'teams' ? 'active' : ''}`} onClick={() => setCurrentTab('teams')}>
+            <div className={`nav-item ${currentTab === 'teams' ? 'active' : ''}`} onClick={() => { setCurrentTab('teams'); setMobileMenuOpen(false); }}>
               <Icons.Teams /> Teams
             </div>
           )}
           {(user.role === 'Super Admin' || user.role === 'Team Leader') && (
-            <div className={`nav-item ${currentTab === 'logs' ? 'active' : ''}`} onClick={() => setCurrentTab('logs')}>
+            <div className={`nav-item ${currentTab === 'logs' ? 'active' : ''}`} onClick={() => { setCurrentTab('logs'); setMobileMenuOpen(false); }}>
               <Icons.Logs /> Activity Logs
             </div>
           )}
@@ -211,11 +215,11 @@ function App() {
             src={user.avatar_url ? `${API_BASE}${user.avatar_url}` : 'https://www.gravatar.com/avatar/00000000000000000000000000000000?d=mp&f=y'} 
             className="user-avatar" 
             alt="avatar"
-            onClick={() => setCurrentTab('profile')}
+            onClick={() => { setCurrentTab('profile'); setMobileMenuOpen(false); }}
             style={{ cursor: 'pointer' }}
           />
           <div className="user-info">
-            <div className="user-name" onClick={() => setCurrentTab('profile')} style={{ cursor: 'pointer' }}>{user.full_name}</div>
+            <div className="user-name" onClick={() => { setCurrentTab('profile'); setMobileMenuOpen(false); }} style={{ cursor: 'pointer' }}>{user.full_name}</div>
             <div className="user-role">{user.role} ({user.employee_id})</div>
           </div>
           <button className="logout-btn" onClick={handleLogout} title="Logout">
@@ -228,6 +232,11 @@ function App() {
       <div className="main-wrapper">
         {/* HEADER BAR */}
         <header className="app-header">
+          <button className="mobile-menu-toggle" onClick={() => setMobileMenuOpen(true)}>
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" style={{ width: '20px', height: '20px' }}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5" />
+            </svg>
+          </button>
           <form className="header-search" onSubmit={handleGlobalSearch}>
             <Icons.Search />
             <input 

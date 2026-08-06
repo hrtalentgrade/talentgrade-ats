@@ -974,3 +974,136 @@ button, input, select, textarea {
   width: 100%;
   height: 100%;
 }
+
+/* Mobile & Tablet Responsiveness System */
+.mobile-menu-toggle {
+  display: none;
+}
+
+.sidebar-mobile-close {
+  display: none;
+}
+
+@media (max-width: 768px) {
+  .mobile-menu-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 6px;
+    border-radius: var(--radius-sm);
+    transition: var(--transition);
+  }
+  
+  .mobile-menu-toggle:hover {
+    background-color: var(--bg-surface-hover);
+    color: var(--text-main);
+  }
+
+  .sidebar-mobile-close {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 6px;
+    border-radius: var(--radius-sm);
+    transition: var(--transition);
+  }
+
+  .sidebar-mobile-close:hover {
+    background-color: var(--bg-surface-hover);
+    color: var(--text-main);
+  }
+
+  .sidebar {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: -240px;
+    z-index: 10001;
+    height: 100%;
+    box-shadow: var(--shadow-lg);
+    transition: left 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  .sidebar.open {
+    left: 0;
+  }
+
+  /* Add dynamic menu close overlay */
+  .sidebar.open::after {
+    content: '';
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 240px;
+    right: 0;
+    background-color: rgba(15, 23, 42, 0.3);
+    z-index: -1;
+    backdrop-filter: blur(1px);
+  }
+
+  .app-header {
+    padding: 0 16px;
+  }
+
+  .header-search {
+    width: auto;
+    flex: 1;
+  }
+
+  .screen-container {
+    padding: 16px;
+    gap: 16px;
+  }
+
+  .page-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+  }
+
+  .page-header .btn {
+    width: 100%;
+  }
+
+  /* Stack Grid columns on mobile */
+  .grid-cols-4,
+  .grid-cols-3,
+  .grid-cols-2,
+  .grid-2-1 {
+    grid-template-columns: 1fr !important;
+    gap: 16px;
+  }
+
+  .form-row {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  /* Login card sizing */
+  .login-card {
+    width: 90%;
+    max-width: 400px;
+    padding: 24px;
+    gap: 16px;
+  }
+
+  /* Tables horizontal scroll container */
+  .table-container {
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border-color);
+  }
+
+  /* Modals full width */
+  .modal-content {
+    width: 95%;
+    max-height: 95vh;
+  }
+}
