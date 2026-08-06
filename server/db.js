@@ -2,58 +2,415 @@ import sqlite3 from 'sqlite3';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import bcrypt from 'bcryptjs';
+import pg from 'pg';
+
+const { Pool } = pg;
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const dbPath = path.resolve(__dirname, 'talentgrade.db');
-const db = new sqlite3.Database(dbPath);
+const isPostgres = process.env.DATABASE_URL && (
+  process.env.DATABASE_URL.startsWith('postgres://') || 
+  process.env.DATABASE_URL.startsWith('postgresql://')
+);
 
-// Enable foreign keys
-db.serialize(() => {
-  db.run('PRAGMA foreign_keys = ON;');
-});
+let dbSqlite = null;
+let dbPostgresPool = null;
+
+if (isPostgres) {
+  console.log('Connecting to PostgreSQL database...');
+  dbPostgresPool = new Pool({
+    connectionString: process.env.DATABASE_URL,
+    ssl: {
+      rejectUnauthorized: false
+    }
+  });
+} else {
+  console.log('Connecting to SQLite database...');
+  const dbPath = path.resolve(__dirname, 'talentgrade.db');
+  dbSqlite = new sqlite3.Database(dbPath);
+  dbSqlite.serialize(() => {
+    dbSqlite.run('PRAGMA foreign_keys = ON;');
+  });
+}
+
+function translateQuery(sql, params) {
+  if (!isPostgres) return { sql, params };
+  
+  let translatedSql = sql;
+  
+  // 1. Replace ? placeholders with $1, $2, $3...
+  let index = 1;
+  translatedSql = translatedSql.replace(/\?/g, () => `$${index++}`);
+  
+  // 2. Append RETURNING id to INSERT statements to get lastID
+  let trimmed = translatedSql.trim().toUpperCase();
+  if (trimmed.startsWith('INSERT') && !trimmed.includes('RETURNING')) {
+    translatedSql += ' RETURNING id';
+  }
+  
+  return { sql: translatedSql, params };
+}
 
 export const run = (sql, params = []) => {
-  return new Promise((resolve, reject) => {
-    db.run(sql, params, function (err) {
-      if (err) {
-        console.error('DB Run Error:', err, 'SQL:', sql);
-        reject(err);
-      } else {
-        resolve({ id: this.lastID, changes: this.changes });
-      }
+  if (isPostgres) {
+    const t = translateQuery(sql, params);
+    return new Promise((resolve, reject) => {
+      dbPostgresPool.query(t.sql, t.params, (err, res) => {
+        if (err) {
+          console.error('PG Run Error:', err, 'SQL:', t.sql);
+          reject(err);
+        } else {
+          resolve({ id: res.rows[0]?.id || null, changes: res.rowCount });
+        }
+      });
     });
-  });
+  } else {
+    return new Promise((resolve, reject) => {
+      dbSqlite.run(sql, params, function (err) {
+        if (err) {
+          console.error('DB Run Error:', err, 'SQL:', sql);
+          reject(err);
+        } else {
+          resolve({ id: this.lastID, changes: this.changes });
+        }
+      });
+    });
+  }
 };
 
 export const get = (sql, params = []) => {
-  return new Promise((resolve, reject) => {
-    db.get(sql, params, (err, row) => {
-      if (err) {
-        console.error('DB Get Error:', err, 'SQL:', sql);
-        reject(err);
-      } else {
-        resolve(row);
-      }
+  if (isPostgres) {
+    const t = translateQuery(sql, params);
+    return new Promise((resolve, reject) => {
+      dbPostgresPool.query(t.sql, t.params, (err, res) => {
+        if (err) {
+          console.error('PG Get Error:', err, 'SQL:', t.sql);
+          reject(err);
+        } else {
+          resolve(res.rows[0] || null);
+        }
+      });
     });
-  });
+  } else {
+    return new Promise((resolve, reject) => {
+      dbSqlite.get(sql, params, (err, row) => {
+        if (err) {
+          console.error('DB Get Error:', err, 'SQL:', sql);
+          reject(err);
+        } else {
+          resolve(row);
+        }
+      });
+    });
+  }
 };
 
 export const all = (sql, params = []) => {
-  return new Promise((resolve, reject) => {
-    db.all(sql, params, (err, rows) => {
-      if (err) {
-        console.error('DB All Error:', err, 'SQL:', sql);
-        reject(err);
-      } else {
-        resolve(rows);
-      }
+  if (isPostgres) {
+    const t = translateQuery(sql, params);
+    return new Promise((resolve, reject) => {
+      dbPostgresPool.query(t.sql, t.params, (err, res) => {
+        if (err) {
+          console.error('PG All Error:', err, 'SQL:', t.sql);
+          reject(err);
+        } else {
+          resolve(res.rows);
+        }
+      });
     });
-  });
+  } else {
+    return new Promise((resolve, reject) => {
+      dbSqlite.all(sql, params, (err, rows) => {
+        if (err) {
+          console.error('DB All Error:', err, 'SQL:', sql);
+          reject(err);
+        } else {
+          resolve(rows);
+        }
+      });
+    });
+  }
 };
 
 export const initDb = async () => {
+  if (isPostgres) {
+    console.log('Initializing PostgreSQL Database...');
+
+    // 1. Teams Table
+    await run(`
+      CREATE TABLE IF NOT EXISTS teams (
+        id SERIAL PRIMARY KEY,
+        name VARCHAR(255) NOT NULL UNIQUE,
+        leader_id INTEGER,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    // 2. Users Table
+    await run(`
+      CREATE TABLE IF NOT EXISTS users (
+        id SERIAL PRIMARY KEY,
+        employee_id VARCHAR(50) NOT NULL UNIQUE,
+        email VARCHAR(255) NOT NULL UNIQUE,
+        password_hash VARCHAR(255) NOT NULL,
+        full_name VARCHAR(255) NOT NULL,
+        role VARCHAR(50) CHECK(role IN ('Super Admin', 'Team Leader', 'Recruiter')) NOT NULL,
+        team_id INTEGER REFERENCES teams(id) ON DELETE SET NULL,
+        avatar_url TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    // Link leader_id in teams to users via foreign key
+    try {
+      await run(`ALTER TABLE teams ADD CONSTRAINT fk_teams_leader FOREIGN KEY (leader_id) REFERENCES users(id) ON DELETE SET NULL`);
+    } catch (e) {
+      // Ignored if constraint already exists
+    }
+
+    // 3. Vacancies Table
+    await run(`
+      CREATE TABLE IF NOT EXISTS vacancies (
+        id SERIAL PRIMARY KEY,
+        title VARCHAR(255) NOT NULL,
+        description TEXT NOT NULL,
+        target_profiles TEXT,
+        priority VARCHAR(50) CHECK(priority IN ('High', 'Medium', 'Low')) DEFAULT 'Medium',
+        deadline TIMESTAMP NOT NULL,
+        status VARCHAR(50) CHECK(status IN ('Open', 'Hold', 'Closed')) DEFAULT 'Open',
+        remarks TEXT,
+        created_by INTEGER REFERENCES users(id) ON DELETE CASCADE,
+        jd_raw_text TEXT,
+        jd_file_path VARCHAR(255),
+        jd_analysis TEXT,
+        jd_screening_questions TEXT,
+        jd_eligibility_checklist TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    // 4. Vacancy Assignments Table
+    await run(`
+      CREATE TABLE IF NOT EXISTS vacancy_assignments (
+        id SERIAL PRIMARY KEY,
+        vacancy_id INTEGER REFERENCES vacancies(id) ON DELETE CASCADE,
+        assigned_to INTEGER REFERENCES users(id) ON DELETE CASCADE,
+        assigned_by INTEGER REFERENCES users(id) ON DELETE CASCADE,
+        assigned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(vacancy_id, assigned_to)
+      )
+    `);
+
+    // 5. Candidates Table
+    await run(`
+      CREATE TABLE IF NOT EXISTS candidates (
+        id SERIAL PRIMARY KEY,
+        name VARCHAR(255) NOT NULL,
+        email VARCHAR(255) NOT NULL UNIQUE,
+        phone VARCHAR(50) NOT NULL UNIQUE,
+        nationality VARCHAR(100),
+        location VARCHAR(255),
+        experience_years INTEGER DEFAULT 0,
+        skills TEXT,
+        current_salary REAL,
+        expected_salary REAL,
+        notice_period_days INTEGER DEFAULT 30,
+        current_position VARCHAR(255),
+        resume_path VARCHAR(255),
+        vacancy_id INTEGER REFERENCES vacancies(id) ON DELETE SET NULL,
+        pipeline_status VARCHAR(50) CHECK(pipeline_status IN (
+          'New', 'Screening', 'Submitted', 'Interview', 'Offer', 'Joined', 'Rejected', 'Dropped'
+        )) DEFAULT 'New',
+        assigned_recruiter_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    // 6. Candidate Timeline Table
+    await run(`
+      CREATE TABLE IF NOT EXISTS candidate_timeline (
+        id SERIAL PRIMARY KEY,
+        candidate_id INTEGER REFERENCES candidates(id) ON DELETE CASCADE,
+        action_type VARCHAR(255) NOT NULL,
+        details TEXT,
+        performed_by INTEGER REFERENCES users(id) ON DELETE CASCADE,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    // 7. Attendance Table
+    await run(`
+      CREATE TABLE IF NOT EXISTS attendance (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+        attendance_date DATE NOT NULL,
+        punch_in_time TIMESTAMP NOT NULL,
+        punch_out_time TIMESTAMP,
+        punch_in_selfie_path VARCHAR(255),
+        punch_in_ip VARCHAR(50),
+        punch_in_browser VARCHAR(255),
+        punch_in_device VARCHAR(255),
+        punch_in_location TEXT,
+        punch_out_location TEXT,
+        working_hours REAL DEFAULT 0,
+        is_late INTEGER DEFAULT 0,
+        overtime_hours REAL DEFAULT 0,
+        UNIQUE(user_id, attendance_date)
+      )
+    `);
+
+    // 8. Tasks Table
+    await run(`
+      CREATE TABLE IF NOT EXISTS tasks (
+        id SERIAL PRIMARY KEY,
+        vacancy_id INTEGER REFERENCES vacancies(id) ON DELETE CASCADE,
+        assigned_to INTEGER REFERENCES users(id) ON DELETE CASCADE,
+        team_id INTEGER REFERENCES teams(id) ON DELETE SET NULL,
+        parent_task_id INTEGER REFERENCES tasks(id) ON DELETE SET NULL,
+        title VARCHAR(255) NOT NULL,
+        description TEXT,
+        target_sourcing_count INTEGER DEFAULT 5,
+        target_submissions_count INTEGER DEFAULT 0,
+        status VARCHAR(50) CHECK(status IN ('Assigned', 'In Progress', 'Submitted', 'Completed', 'Overdue', 'Cancelled')) DEFAULT 'Assigned',
+        deadline TIMESTAMP NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    // 9. Task Comments Table
+    await run(`
+      CREATE TABLE IF NOT EXISTS task_comments (
+        id SERIAL PRIMARY KEY,
+        task_id INTEGER REFERENCES tasks(id) ON DELETE CASCADE,
+        user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+        comment TEXT NOT NULL,
+        attachment_path VARCHAR(255),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    // 10. Vendors Table
+    await run(`
+      CREATE TABLE IF NOT EXISTS vendors (
+        id SERIAL PRIMARY KEY,
+        company_name VARCHAR(255) NOT NULL,
+        poc_name VARCHAR(255) NOT NULL,
+        phone VARCHAR(50),
+        whatsapp VARCHAR(50),
+        email VARCHAR(255) NOT NULL UNIQUE,
+        countries TEXT,
+        specialization TEXT,
+        remarks TEXT,
+        managed_by INTEGER REFERENCES users(id) ON DELETE CASCADE,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    // 11. Activity Logs Table
+    await run(`
+      CREATE TABLE IF NOT EXISTS activity_logs (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+        action VARCHAR(255) NOT NULL,
+        details TEXT,
+        ip_address VARCHAR(50),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    // 12. Notifications Table
+    await run(`
+      CREATE TABLE IF NOT EXISTS notifications (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+        title VARCHAR(255) NOT NULL,
+        message TEXT NOT NULL,
+        is_read INTEGER DEFAULT 0,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    // 13. Screenings Table
+    await run(`
+      CREATE TABLE IF NOT EXISTS screenings (
+        id SERIAL PRIMARY KEY,
+        candidate_id INTEGER REFERENCES candidates(id) ON DELETE CASCADE,
+        vacancy_id INTEGER REFERENCES vacancies(id) ON DELETE CASCADE,
+        recruiter_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+        answers TEXT,
+        follow_up_questions TEXT,
+        ai_match_scores TEXT,
+        missing_info TEXT,
+        recruiter_notes TEXT,
+        recruiter_recommendation VARCHAR(50) CHECK(recruiter_recommendation IN ('Recommended', 'Maybe', 'Not Suitable')) NOT NULL,
+        ai_reasoning TEXT,
+        is_approved_by_tl INTEGER DEFAULT 0,
+        tl_approved_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        tl_approved_at TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(candidate_id, vacancy_id)
+      )
+    `);
+
+    // Create Indexes
+    await run(`CREATE INDEX IF NOT EXISTS idx_users_emp ON users(employee_id)`);
+    await run(`CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)`);
+    await run(`CREATE INDEX IF NOT EXISTS idx_candidates_email ON candidates(email)`);
+    await run(`CREATE INDEX IF NOT EXISTS idx_candidates_phone ON candidates(phone)`);
+    await run(`CREATE INDEX IF NOT EXISTS idx_candidates_vacancy ON candidates(vacancy_id)`);
+    await run(`CREATE INDEX IF NOT EXISTS idx_attendance_user_date ON attendance(user_id, attendance_date)`);
+    await run(`CREATE INDEX IF NOT EXISTS idx_tasks_assigned_to ON tasks(assigned_to)`);
+    await run(`CREATE INDEX IF NOT EXISTS idx_activity_logs_user ON activity_logs(user_id)`);
+
+    // Seed default teams
+    const teamCount = await get(`SELECT COUNT(*) as count FROM teams`);
+    if (parseInt(teamCount.count) === 0) {
+      console.log('Seeding initial teams (Team A, Team B)...');
+      await run(`INSERT INTO teams (name) VALUES ('Team A')`);
+      await run(`INSERT INTO teams (name) VALUES ('Team B')`);
+    }
+
+    // Seed default users
+    const userCount = await get(`SELECT COUNT(*) as count FROM users`);
+    if (parseInt(userCount.count) === 0) {
+      console.log('Seeding default enterprise users for PostgreSQL...');
+      const teams = await all(`SELECT id, name FROM teams`);
+      const teamAId = teams.find(t => t.name === 'Team A')?.id || null;
+
+      // Super Admin: admin@tgats.com / TG1001 / admin@123
+      const hashAdmin = bcrypt.hashSync('admin@123', 10);
+      await run(`
+        INSERT INTO users (employee_id, email, password_hash, full_name, role)
+        VALUES ('TG1001', 'admin@tgats.com', ?, 'Super Admin User', 'Super Admin')
+      `, [hashAdmin]);
+
+      // Team Leader: tl1@tgats.com / TG1002 / tl@123 (assigned to Team A)
+      const hashTL = bcrypt.hashSync('tl@123', 10);
+      const tlResult = await run(`
+        INSERT INTO users (employee_id, email, password_hash, full_name, role, team_id)
+        VALUES ('TG1002', 'tl1@tgats.com', ?, 'Team Leader A', 'Team Leader', ?)
+      `, [hashTL, teamAId]);
+
+      // Update Team A's leader
+      await run(`UPDATE teams SET leader_id = ? WHERE id = ?`, [tlResult.id, teamAId]);
+
+      // Recruiter: recruiter1@tgats.com / TG1003 / recruiter@123 (assigned to Team A)
+      const hashRecruiter = bcrypt.hashSync('recruiter@123', 10);
+      await run(`
+        INSERT INTO users (employee_id, email, password_hash, full_name, role, team_id)
+        VALUES ('TG1003', 'recruiter1@tgats.com', ?, 'Recruiter One', 'Recruiter', ?)
+      `, [hashRecruiter, teamAId]);
+
+      console.log('PostgreSQL seeding completed successfully.');
+    } else {
+      console.log('PostgreSQL Database already has users. Seeding skipped.');
+    }
+
+    console.log('PostgreSQL DB initialization complete.');
+    return;
+  }
+
   console.log('Initializing SQLite Database...');
 
   // 1. Teams Table
