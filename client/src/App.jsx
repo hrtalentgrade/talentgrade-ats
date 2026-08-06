@@ -2618,10 +2618,6 @@ function CandidatesView({ user, token }) {
 
   const handleCandidateSave = async (e) => {
     e.preventDefault();
-    if (!parsedData.vacancy_id) {
-      alert('Please assign this candidate to a vacancy');
-      return;
-    }
     setSavingCandidate(true);
     try {
       const res = await fetch(`${API_BASE}/api/candidates`, {
@@ -2923,7 +2919,7 @@ function CandidatesView({ user, token }) {
                       <div style={{ fontWeight: '600' }}>{c.name}</div>
                       <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{c.email} • {c.phone}</div>
                     </td>
-                    <td>{c.vacancy_title}</td>
+                    <td>{c.vacancy_title || 'Unassigned'}</td>
                     <td>{c.experience_years} yrs</td>
                     <td style={{ maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={c.skills}>{c.skills || '-'}</td>
                     <td>{c.location || '-'}</td>
@@ -2981,8 +2977,8 @@ function CandidatesView({ user, token }) {
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                     <div className="form-group">
                       <label>Assigned Job Vacancy</label>
-                      <select className="form-control" value={parsedData.vacancy_id} onChange={(e) => setParsedData({ ...parsedData, vacancy_id: e.target.value })} required>
-                        <option value="">Select Job Position...</option>
+                      <select className="form-control" value={parsedData.vacancy_id || ''} onChange={(e) => setParsedData({ ...parsedData, vacancy_id: e.target.value || null })}>
+                        <option value="">Select Job Position (Optional)...</option>
                         {vacancies.map(v => (
                           <option key={v.id} value={v.id}>{v.title}</option>
                         ))}
@@ -3129,7 +3125,7 @@ function CandidatesView({ user, token }) {
                     <div>Nationality: <strong>{selectedCandidate.candidate.nationality || 'General'}</strong></div>
                     <div>Location: <strong>{selectedCandidate.candidate.location || '-'}</strong></div>
                     <div>Skills: <strong style={{ fontSize: '12px' }}>{selectedCandidate.candidate.skills || 'None'}</strong></div>
-                    <div>Vacancy assigned: <strong>{selectedCandidate.candidate.vacancy_title}</strong></div>
+                    <div>Vacancy assigned: <strong>{selectedCandidate.candidate.vacancy_title || 'Unassigned'}</strong></div>
                     <div>Current CTC: <strong>{selectedCandidate.candidate.current_salary ? `${selectedCandidate.candidate.current_salary} LPA` : '-'}</strong></div>
                     <div>Expected CTC: <strong>{selectedCandidate.candidate.expected_salary ? `${selectedCandidate.candidate.expected_salary} LPA` : '-'}</strong></div>
                     <div>Notice Period: <strong>{selectedCandidate.candidate.notice_period_days} days</strong></div>
@@ -3391,7 +3387,7 @@ function CandidatesView({ user, token }) {
                       </tr>
                       <tr>
                         <td style={{ padding: '4px 0', color: '#6b7280' }}>Target Vacancy:</td>
-                        <td style={{ padding: '4px 0', fontWeight: '600', color: '#d92525' }}>{selectedCandidate.candidate.vacancy_title}</td>
+                        <td style={{ padding: '4px 0', fontWeight: '600', color: '#d92525' }}>{selectedCandidate.candidate.vacancy_title || 'Unassigned'}</td>
                       </tr>
                     </tbody>
                   </table>

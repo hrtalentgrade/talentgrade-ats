@@ -1259,8 +1259,8 @@ app.post('/api/candidates', authenticateToken, async (req, res) => {
     pipeline_status
   } = req.body;
 
-  if (!name || !email || !phone || !vacancy_id) {
-    return res.status(400).json({ error: 'Name, email, phone and vacancy are required' });
+  if (!name || !email || !phone) {
+    return res.status(400).json({ error: 'Name, email, and phone are required' });
   }
 
   try {
@@ -1283,7 +1283,7 @@ app.post('/api/candidates', authenticateToken, async (req, res) => {
     `, [
       name, email, phone, nationality, location, experience_years || 0, skills,
       current_salary, expected_salary, notice_period_days || 30, current_position,
-      resume_path, vacancy_id, req.user.id, pipeline_status || 'New'
+      resume_path, vacancy_id || null, req.user.id, pipeline_status || 'New'
     ]);
 
     // Log timeline
@@ -1292,7 +1292,8 @@ app.post('/api/candidates', authenticateToken, async (req, res) => {
       VALUES (?, 'Created', 'Candidate profiles uploaded and registered.', ?)
     `, [result.id, req.user.id]);
 
-    await logActivity(req.user.id, 'Add Candidate', `Registered candidate "${name}" for vacancy ${vacancy_id}`, '');
+    const logMsg = vacancy_id ? `Registered candidate "${name}" for vacancy ${vacancy_id}` : `Registered candidate "${name}" (unassigned)`;
+    await logActivity(req.user.id, 'Add Candidate', logMsg, '');
 
     // Log check if task updates target status (e.g. increments submitted count)
     res.json({ message: 'Candidate added successfully', candidateId: result.id });
@@ -1311,7 +1312,7 @@ app.get('/api/candidates', authenticateToken, async (req, res) => {
     let query = `
       SELECT c.*, v.title as vacancy_title, u.full_name as recruiter_name
       FROM candidates c
-      JOIN vacancies v ON c.vacancy_id = v.id
+      LEFT JOIN vacancies v ON c.vacancy_id = v.id
       LEFT JOIN users u ON c.assigned_recruiter_id = u.id
     `;
     const params = [];
@@ -1363,7 +1364,7 @@ app.get('/api/candidates/:id', authenticateToken, async (req, res) => {
     const candidate = await get(`
       SELECT c.*, v.title as vacancy_title, u.full_name as recruiter_name
       FROM candidates c
-      JOIN vacancies v ON c.vacancy_id = v.id
+      LEFT JOIN vacancies v ON c.vacancy_id = v.id
       LEFT JOIN users u ON c.assigned_recruiter_id = u.id
       WHERE c.id = ?
     `, [id]);

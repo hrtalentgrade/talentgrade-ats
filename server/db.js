@@ -139,13 +139,13 @@ export const initDb = async () => {
       notice_period_days INTEGER DEFAULT 30,
       current_position TEXT,
       resume_path TEXT,
-      vacancy_id INTEGER NOT NULL,
+      vacancy_id INTEGER,
       pipeline_status TEXT CHECK(pipeline_status IN (
         'New', 'Screening', 'Submitted', 'Interview', 'Offer', 'Joined', 'Rejected', 'Dropped'
       )) DEFAULT 'New',
       assigned_recruiter_id INTEGER,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (vacancy_id) REFERENCES vacancies(id) ON DELETE CASCADE,
+      FOREIGN KEY (vacancy_id) REFERENCES vacancies(id) ON DELETE SET NULL,
       FOREIGN KEY (assigned_recruiter_id) REFERENCES users(id) ON DELETE SET NULL
     )
   `);
@@ -319,6 +319,196 @@ export const initDb = async () => {
     console.log('Migrating attendance table schema for Location details...');
     await run('ALTER TABLE attendance ADD COLUMN punch_in_location TEXT');
     await run('ALTER TABLE attendance ADD COLUMN punch_out_location TEXT');
+  }
+
+  // Migration to make vacancy_id nullable in candidates table
+  const candidatesTableInfo = await all("PRAGMA table_info(candidates)");
+  const vacancyIdCol = candidatesTableInfo.find(c => c.name === 'vacancy_id');
+  if (vacancyIdCol && vacancyIdCol.notnull === 1) {
+    console.log('Migrating candidates table schema: Making vacancy_id nullable...');
+    
+    // Disable foreign keys temporarily
+    await run('PRAGMA foreign_keys = OFF');
+    
+    // Rename old table
+    await run('ALTER TABLE candidates RENAME TO candidates_old');
+    
+    // Create new candidates table with vacancy_id nullable
+    await run(`
+      CREATE TABLE candidates (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        email TEXT NOT NULL UNIQUE,
+        phone TEXT NOT NULL UNIQUE,
+        nationality TEXT,
+        location TEXT,
+        experience_years INTEGER DEFAULT 0,
+        skills TEXT,
+        current_salary REAL,
+        expected_salary REAL,
+        notice_period_days INTEGER DEFAULT 30,
+        current_position TEXT,
+        resume_path TEXT,
+        vacancy_id INTEGER,
+        pipeline_status TEXT CHECK(pipeline_status IN (
+          'New', 'Screening', 'Submitted', 'Interview', 'Offer', 'Joined', 'Rejected', 'Dropped'
+        )) DEFAULT 'New',
+        assigned_recruiter_id INTEGER,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (vacancy_id) REFERENCES vacancies(id) ON DELETE SET NULL,
+        FOREIGN KEY (assigned_recruiter_id) REFERENCES users(id) ON DELETE SET NULL
+      )
+    `);
+    
+    // Copy data from candidates_old
+    await run(`
+      INSERT INTO candidates (
+        id, name, email, phone, nationality, location, experience_years, skills,
+        current_salary, expected_salary, notice_period_days, current_position,
+        resume_path, vacancy_id, pipeline_status, assigned_recruiter_id, created_at
+      )
+      SELECT 
+        id, name, email, phone, nationality, location, experience_years, skills,
+        current_salary, expected_salary, notice_period_days, current_position,
+        resume_path, vacancy_id, pipeline_status, assigned_recruiter_id, created_at
+      FROM candidates_old
+    `);
+    
+    // Drop old table
+    await run('DROP TABLE candidates_old');
+    
+    // Re-enable foreign keys
+    await run('PRAGMA foreign_keys = ON');
+    console.log('Candidates vacancy_id nullable migration complete.');
+  }
+
+  // Fix foreign keys for tables referencing candidates (in case candidates_old rename broke them)
+  try {
+    const timelineTableInfo = await all("PRAGMA foreign_key_list(candidate_timeline)");
+    const hasOldTimelineRef = timelineTableInfo.some(fk => fk.table === 'candidates_old');
+    if (hasOldTimelineRef) {
+      console.log('Rebuilding candidate_timeline foreign key reference...');
+      await run('PRAGMA foreign_keys = OFF');
+      await run('ALTER TABLE candidate_timeline RENAME TO candidate_timeline_old');
+      await run(`
+        CREATE TABLE candidate_timeline (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          candidate_id INTEGER NOT NULL,
+          action_type TEXT NOT NULL,
+          details TEXT,
+          performed_by INTEGER NOT NULL,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (candidate_id) REFERENCES candidates(id) ON DELETE CASCADE,
+          FOREIGN KEY (performed_by) REFERENCES users(id) ON DELETE CASCADE
+        )
+      `);
+      await run(`
+        INSERT INTO candidate_timeline (id, candidate_id, action_type, details, performed_by, created_at)
+        SELECT id, candidate_id, action_type, details, performed_by, created_at FROM candidate_timeline_old
+      `);
+      await run('DROP TABLE candidate_timeline_old');
+      await run('PRAGMA foreign_keys = ON');
+      console.log('candidate_timeline rebuilt.');
+    }
+  } catch (err) {
+    console.error('Error rebuilding timeline foreign keys:', err);
+  }
+
+  try {
+    // Recovery/Rebuild for screenings table
+    const screeningsOldExists = await get("SELECT name FROM sqlite_master WHERE type='table' AND name='screenings_old'");
+    if (screeningsOldExists) {
+      console.log('Recovering and rebuilding screenings table from screenings_old...');
+      await run('PRAGMA foreign_keys = OFF');
+      await run('DROP TABLE IF EXISTS screenings');
+      await run(`
+        CREATE TABLE screenings (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          candidate_id INTEGER NOT NULL,
+          vacancy_id INTEGER NOT NULL,
+          recruiter_id INTEGER NOT NULL,
+          answers TEXT,
+          follow_up_questions TEXT,
+          ai_match_scores TEXT,
+          missing_info TEXT,
+          recruiter_notes TEXT,
+          recruiter_recommendation TEXT CHECK(recruiter_recommendation IN ('Recommended', 'Maybe', 'Not Suitable')) NOT NULL,
+          ai_reasoning TEXT,
+          is_approved_by_tl INTEGER DEFAULT 0,
+          tl_approved_by INTEGER,
+          tl_approved_at DATETIME,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (candidate_id) REFERENCES candidates(id) ON DELETE CASCADE,
+          FOREIGN KEY (vacancy_id) REFERENCES vacancies(id) ON DELETE CASCADE,
+          FOREIGN KEY (recruiter_id) REFERENCES users(id) ON DELETE CASCADE,
+          FOREIGN KEY (tl_approved_by) REFERENCES users(id) ON DELETE SET NULL
+        )
+      `);
+      await run(`
+        INSERT INTO screenings (
+          id, candidate_id, vacancy_id, recruiter_id, answers, follow_up_questions,
+          ai_match_scores, missing_info, recruiter_notes, recruiter_recommendation,
+          ai_reasoning, is_approved_by_tl, tl_approved_by, tl_approved_at, created_at
+        )
+        SELECT 
+          id, candidate_id, vacancy_id, recruiter_id, answers, follow_up_questions,
+          ai_match_scores, missing_info, recruiter_notes, recruiter_recommendation,
+          ai_reasoning, is_approved_by_tl, tl_approved_by, tl_approved_at, created_at
+        FROM screenings_old
+      `);
+      await run('DROP TABLE screenings_old');
+      await run('PRAGMA foreign_keys = ON');
+      console.log('screenings table successfully recovered and rebuilt.');
+    } else {
+      // Normal migration check (if table was not already renamed)
+      const screeningsTableInfo = await all("PRAGMA foreign_key_list(screenings)");
+      const hasOldScreeningsRef = screeningsTableInfo.some(fk => fk.table === 'candidates_old');
+      if (hasOldScreeningsRef) {
+        console.log('Rebuilding screenings foreign key reference...');
+        await run('PRAGMA foreign_keys = OFF');
+        await run('ALTER TABLE screenings RENAME TO screenings_old');
+        await run(`
+          CREATE TABLE screenings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            candidate_id INTEGER NOT NULL,
+            vacancy_id INTEGER NOT NULL,
+            recruiter_id INTEGER NOT NULL,
+            answers TEXT,
+            follow_up_questions TEXT,
+            ai_match_scores TEXT,
+            missing_info TEXT,
+            recruiter_notes TEXT,
+            recruiter_recommendation TEXT CHECK(recruiter_recommendation IN ('Recommended', 'Maybe', 'Not Suitable')) NOT NULL,
+            ai_reasoning TEXT,
+            is_approved_by_tl INTEGER DEFAULT 0,
+            tl_approved_by INTEGER,
+            tl_approved_at DATETIME,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (candidate_id) REFERENCES candidates(id) ON DELETE CASCADE,
+            FOREIGN KEY (vacancy_id) REFERENCES vacancies(id) ON DELETE CASCADE,
+            FOREIGN KEY (recruiter_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (tl_approved_by) REFERENCES users(id) ON DELETE SET NULL
+          )
+        `);
+        await run(`
+          INSERT INTO screenings (
+            id, candidate_id, vacancy_id, recruiter_id, answers, follow_up_questions,
+            ai_match_scores, missing_info, recruiter_notes, recruiter_recommendation,
+            ai_reasoning, is_approved_by_tl, tl_approved_by, tl_approved_at, created_at
+          )
+          SELECT 
+            id, candidate_id, vacancy_id, recruiter_id, answers, follow_up_questions,
+            ai_match_scores, missing_info, recruiter_notes, recruiter_recommendation,
+            ai_reasoning, is_approved_by_tl, tl_approved_by, tl_approved_at, created_at
+          FROM screenings_old
+        `);
+        await run('DROP TABLE screenings_old');
+        await run('PRAGMA foreign_keys = ON');
+        console.log('screenings rebuilt.');
+      }
+    }
+  } catch (err) {
+    console.error('Error rebuilding screenings foreign keys:', err);
   }
 
   // Index setup
