@@ -3835,7 +3835,9 @@ function ReportsView({ user, token }) {
 function TeamsView({ user, token }) {
   const [teams, setTeams] = useState([]);
   const [recruiters, setRecruiters] = useState([]);
+  const [employees, setEmployees] = useState([]);
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [showEmployeeModal, setShowEmployeeModal] = useState(false);
   const [newTeamName, setNewTeamName] = useState('');
   
   // Member assignment state
@@ -3843,9 +3845,19 @@ function TeamsView({ user, token }) {
   const [memberUserId, setMemberUserId] = useState('');
   const [leaderUserId, setLeaderUserId] = useState('');
 
+  // Add Employee Form state
+  const [empId, setEmpId] = useState('');
+  const [empName, setEmpName] = useState('');
+  const [empEmail, setEmpEmail] = useState('');
+  const [empPassword, setEmpPassword] = useState('');
+  const [empRole, setEmpRole] = useState('Recruiter');
+  const [empTeamId, setEmpTeamId] = useState('');
+  const [savingEmp, setSavingEmp] = useState(false);
+
   useEffect(() => {
     fetchTeams();
     fetchRecruiters();
+    fetchEmployees();
   }, []);
 
   const fetchTeams = async () => {
@@ -3867,6 +3879,18 @@ function TeamsView({ user, token }) {
       });
       const data = await res.json();
       setRecruiters(data.users || []);
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const fetchEmployees = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/users`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const data = await res.json();
+      setEmployees(data.users || []);
     } catch (err) {
       console.error(err);
     }
@@ -3896,6 +3920,48 @@ function TeamsView({ user, token }) {
     }
   };
 
+  const handleCreateEmployee = async (e) => {
+    e.preventDefault();
+    setSavingEmp(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/users`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          employee_id: empId,
+          full_name: empName,
+          email: empEmail,
+          password: empPassword,
+          role: empRole,
+          team_id: empTeamId ? parseInt(empTeamId) : null
+        })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        alert('Employee registered successfully!');
+        setEmpId('');
+        setEmpName('');
+        setEmpEmail('');
+        setEmpPassword('');
+        setEmpRole('Recruiter');
+        setEmpTeamId('');
+        setShowEmployeeModal(false);
+        fetchEmployees();
+        fetchRecruiters();
+        fetchTeams(); // refresh member counts
+      } else {
+        alert(data.error || 'Failed to create user');
+      }
+    } catch (err) {
+      alert('Error registering employee');
+    } finally {
+      setSavingEmp(false);
+    }
+  };
+
   const handleAssignLeader = async (e) => {
     e.preventDefault();
     if (!selectedTeamId || !leaderUserId) return;
@@ -3913,6 +3979,7 @@ function TeamsView({ user, token }) {
         setSelectedTeamId('');
         fetchTeams();
         fetchRecruiters();
+        fetchEmployees();
       }
     } catch (err) {
       alert('Error assigning team leader');
@@ -3936,6 +4003,7 @@ function TeamsView({ user, token }) {
         setSelectedTeamId('');
         fetchTeams();
         fetchRecruiters();
+        fetchEmployees();
       }
     } catch (err) {
       alert('Error adding member to team');
@@ -3946,12 +4014,17 @@ function TeamsView({ user, token }) {
     <>
       <div className="page-header">
         <div>
-          <h2 className="page-title">TalentGrade Team Center</h2>
+          <h2 className="page-title">TalentGrade Team & Employee Center</h2>
           <div className="page-subtitle">Configure department structures, assign leaders, and assign recruiters.</div>
         </div>
-        <button className="btn btn-primary" onClick={() => setShowCreateModal(true)}>
-          <Icons.Plus /> Create Sourcing Team
-        </button>
+        <div style={{ display: 'flex', gap: '10px' }}>
+          <button className="btn btn-secondary" onClick={() => setShowEmployeeModal(true)}>
+            <Icons.Plus /> Add Employee User
+          </button>
+          <button className="btn btn-primary" onClick={() => setShowCreateModal(true)}>
+            <Icons.Plus /> Create Sourcing Team
+          </button>
+        </div>
       </div>
 
       <div className="grid-2-1">
@@ -4048,6 +4121,41 @@ function TeamsView({ user, token }) {
         </div>
       </div>
 
+      {/* EMPLOYEE ROSTER SECTION */}
+      <div className="card" style={{ marginTop: '24px' }}>
+        <div className="card-header">
+          <span className="card-title">Employee Roster ({employees.length})</span>
+        </div>
+        <div className="table-container">
+          <table className="tg-table">
+            <thead>
+              <tr>
+                <th>Employee ID</th>
+                <th>Full Name</th>
+                <th>Email Address</th>
+                <th>System Role</th>
+                <th>Assigned Team</th>
+              </tr>
+            </thead>
+            <tbody>
+              {employees.map(emp => (
+                <tr key={emp.id}>
+                  <td style={{ fontWeight: '600' }}>{emp.employee_id}</td>
+                  <td style={{ fontWeight: '600' }}>{emp.full_name}</td>
+                  <td>{emp.email}</td>
+                  <td>
+                    <span className={`badge ${emp.role === 'Super Admin' ? 'badge-danger' : emp.role === 'Team Leader' ? 'badge-warning' : 'badge-info'}`}>
+                      {emp.role}
+                    </span>
+                  </td>
+                  <td>{emp.team_name || <span style={{ color: 'var(--text-muted)', fontSize: '11px' }}>None</span>}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
       {/* CREATE TEAM MODAL */}
       {showCreateModal && (
         <div className="modal-overlay">
@@ -4066,6 +4174,59 @@ function TeamsView({ user, token }) {
               <div className="modal-footer">
                 <button type="button" className="btn btn-secondary" onClick={() => setShowCreateModal(false)}>Cancel</button>
                 <button type="submit" className="btn btn-primary">Create Team</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* CREATE EMPLOYEE MODAL */}
+      {showEmployeeModal && (
+        <div className="modal-overlay">
+          <div className="modal-content" style={{ maxWidth: '450px' }}>
+            <div className="modal-header">
+              <h3 className="card-title">Register New Employee User</h3>
+              <button className="modal-close" onClick={() => setShowEmployeeModal(false)}><Icons.Close /></button>
+            </div>
+            <form onSubmit={handleCreateEmployee}>
+              <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                <div className="form-group">
+                  <label>Employee ID</label>
+                  <input type="text" className="form-control" placeholder="e.g., TG1005" value={empId} onChange={(e) => setEmpId(e.target.value)} required />
+                </div>
+                <div className="form-group">
+                  <label>Full Name</label>
+                  <input type="text" className="form-control" placeholder="e.g., Jane Smith" value={empName} onChange={(e) => setEmpName(e.target.value)} required />
+                </div>
+                <div className="form-group">
+                  <label>Email Address</label>
+                  <input type="email" className="form-control" placeholder="e.g., jane@tgats.com" value={empEmail} onChange={(e) => setEmpEmail(e.target.value)} required />
+                </div>
+                <div className="form-group">
+                  <label>Initial Login Password</label>
+                  <input type="text" className="form-control" placeholder="Initial temporary password" value={empPassword} onChange={(e) => setEmpPassword(e.target.value)} required />
+                </div>
+                <div className="form-group">
+                  <label>System Role</label>
+                  <select className="form-control" value={empRole} onChange={(e) => setEmpRole(e.target.value)} required>
+                    <option value="Recruiter">Recruiter (Default Sourcing Agent)</option>
+                    <option value="Team Leader">Team Leader (Sourcing Manager)</option>
+                    <option value="Super Admin">Super Admin (Platform Administrator)</option>
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label>Assign to Team (Optional)</label>
+                  <select className="form-control" value={empTeamId} onChange={(e) => setEmpTeamId(e.target.value)}>
+                    <option value="">No Team / Unassigned</option>
+                    {teams.map(t => (
+                      <option key={t.id} value={t.id}>{t.name}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+              <div className="modal-footer">
+                <button type="button" className="btn btn-secondary" onClick={() => setShowEmployeeModal(false)}>Cancel</button>
+                <button type="submit" className="btn btn-primary" disabled={savingEmp}>{savingEmp ? 'Saving...' : 'Register Employee'}</button>
               </div>
             </form>
           </div>

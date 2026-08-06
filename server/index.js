@@ -590,6 +590,59 @@ app.post('/api/teams/:id/add-member', authenticateToken, requireRole(['Super Adm
 });
 
 // ==========================================
+// 3.5 USER MANAGEMENT ENDPOINTS (ADMIN ONLY)
+// ==========================================
+
+app.get('/api/users', authenticateToken, requireRole(['Super Admin']), async (req, res) => {
+  try {
+    const list = await all(`
+      SELECT u.id, u.employee_id, u.email, u.full_name, u.role, u.team_id, t.name as team_name
+      FROM users u
+      LEFT JOIN teams t ON u.team_id = t.id
+      ORDER BY u.id DESC
+    `);
+    res.json({ users: list });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to fetch users list' });
+  }
+});
+
+app.post('/api/users', authenticateToken, requireRole(['Super Admin']), async (req, res) => {
+  const { employee_id, email, password, full_name, role, team_id } = req.body;
+
+  if (!employee_id || !email || !password || !full_name || !role) {
+    return res.status(400).json({ error: 'All fields (Employee ID, email, password, full name, and role) are required' });
+  }
+
+  const validRoles = ['Super Admin', 'Team Leader', 'Recruiter'];
+  if (!validRoles.includes(role)) {
+    return res.status(400).json({ error: 'Invalid user role' });
+  }
+
+  try {
+    // Check duplicates
+    const duplicate = await get('SELECT id FROM users WHERE email = ? OR employee_id = ?', [email, employee_id]);
+    if (duplicate) {
+      return res.status(400).json({ error: 'User with this Email or Employee ID already exists' });
+    }
+
+    const passwordHash = bcrypt.hashSync(password, 10);
+    const result = await run(`
+      INSERT INTO users (employee_id, email, password_hash, full_name, role, team_id)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `, [employee_id, email, passwordHash, full_name, role, team_id || null]);
+
+    await logActivity(req.user.id, 'Create User', `Created employee user "${full_name}" (Role: ${role})`, '');
+
+    res.json({ message: 'User created successfully', userId: result.id });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to create user' });
+  }
+});
+
+// ==========================================
 // 4. VACANCY MANAGEMENT ENDPOINTS
 // ==========================================
 
