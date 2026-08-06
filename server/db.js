@@ -14,17 +14,71 @@ const isPostgres = process.env.DATABASE_URL && (
   process.env.DATABASE_URL.startsWith('postgresql://')
 );
 
+function parseConnectionString(uri) {
+  try {
+    const prefix = uri.startsWith('postgresql://') ? 'postgresql://' : 'postgres://';
+    const rest = uri.substring(prefix.length);
+    
+    const atIndex = rest.lastIndexOf('@');
+    if (atIndex === -1) return null;
+    
+    const userPass = rest.substring(0, atIndex);
+    const hostDb = rest.substring(atIndex + 1);
+    
+    const colonIndex = userPass.indexOf(':');
+    if (colonIndex === -1) return null;
+    
+    const user = decodeURIComponent(userPass.substring(0, colonIndex));
+    const password = decodeURIComponent(userPass.substring(colonIndex + 1));
+    
+    const slashIndex = hostDb.indexOf('/');
+    if (slashIndex === -1) return null;
+    
+    const hostPort = hostDb.substring(0, slashIndex);
+    const dbOptions = hostDb.substring(slashIndex + 1);
+    
+    const dbName = dbOptions.split('?')[0];
+    
+    let host = hostPort;
+    let port = 5432;
+    const hostColon = hostPort.indexOf(':');
+    if (hostColon !== -1) {
+      host = hostPort.substring(0, hostColon);
+      port = parseInt(hostPort.substring(hostColon + 1)) || 5432;
+    }
+    
+    return { user, password, host, port, database: dbName };
+  } catch (e) {
+    return null;
+  }
+}
+
 let dbSqlite = null;
 let dbPostgresPool = null;
 
 if (isPostgres) {
   console.log('Connecting to PostgreSQL database...');
-  dbPostgresPool = new Pool({
-    connectionString: process.env.DATABASE_URL,
-    ssl: {
-      rejectUnauthorized: false
-    }
-  });
+  const parsed = parseConnectionString(process.env.DATABASE_URL);
+  if (parsed) {
+    console.log(`Parsed PG Config - Host: ${parsed.host}, Port: ${parsed.port}, DB: ${parsed.database}, User: ${parsed.user}`);
+    dbPostgresPool = new Pool({
+      user: parsed.user,
+      password: parsed.password,
+      host: parsed.host,
+      port: parsed.port,
+      database: parsed.database,
+      ssl: {
+        rejectUnauthorized: false
+      }
+    });
+  } else {
+    dbPostgresPool = new Pool({
+      connectionString: process.env.DATABASE_URL,
+      ssl: {
+        rejectUnauthorized: false
+      }
+    });
+  }
 } else {
   console.log('Connecting to SQLite database...');
   const dbPath = path.resolve(__dirname, 'talentgrade.db');
