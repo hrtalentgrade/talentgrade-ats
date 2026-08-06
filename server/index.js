@@ -242,7 +242,7 @@ app.post('/api/auth/forgot-password', async (req, res) => {
 });
 
 app.post('/api/auth/punch-in', async (req, res) => {
-  const { identifier, latitude, longitude } = req.body;
+  const { identifier, latitude, longitude, selfie } = req.body;
 
   if (!identifier) {
     return res.status(400).json({ error: 'Employee ID or Email is required' });
@@ -264,6 +264,15 @@ app.post('/api/auth/punch-in', async (req, res) => {
       });
     }
 
+    // Step 1 check only (no selfie provided yet)
+    if (!selfie) {
+      return res.json({
+        alreadyPunchedIn: false,
+        message: 'Ready to perform selfie punch-in.',
+        user: { id: user.id, full_name: user.full_name, role: user.role }
+      });
+    }
+
     // Threshold: Late if after 09:42 AM IST
     const totalMinutesInIst = ist.hour * 60 + ist.minute;
     const limitMinutes = 9 * 60 + 42; // 9:42 AM
@@ -272,6 +281,17 @@ app.post('/api/auth/punch-in', async (req, res) => {
     const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress || '';
     const { browser, device } = parseUserAgent(req.headers['user-agent']);
     const locationStr = latitude && longitude ? `${latitude}, ${longitude}` : 'Not Shared';
+
+    // Decode and save selfie image
+    let dbSelfiePath = 'Selfie Not Shared';
+    const matches = selfie.match(/^data:image\/([A-Za-z-+\/]+);base64,(.+)$/);
+    if (matches && matches.length === 3) {
+      const imageBuffer = Buffer.from(matches[2], 'base64');
+      const filename = `selfie_login_${user.id}_${Date.now()}.jpg`;
+      const filePath = path.join(selfiesDir, filename);
+      fs.writeFileSync(filePath, imageBuffer);
+      dbSelfiePath = `/uploads/selfies/${filename}`;
+    }
 
     await run(`
       INSERT INTO attendance (
@@ -282,7 +302,7 @@ app.post('/api/auth/punch-in', async (req, res) => {
       user.id,
       ist.dateStr,
       new Date().toISOString(),
-      'Selfie Not Taken (Login Punch-In)',
+      dbSelfiePath,
       clientIp,
       browser,
       device,
@@ -290,7 +310,7 @@ app.post('/api/auth/punch-in', async (req, res) => {
       isLate
     ]);
 
-    await logActivity(user.id, 'Attendance Punch-In', `Punched in via login screen (IST: ${ist.hour}:${ist.minute})`, clientIp);
+    await logActivity(user.id, 'Attendance Punch-In', `Punched in via login screen with live photo (IST: ${ist.hour}:${ist.minute})`, clientIp);
 
     res.json({
       message: 'Punch-in successful!',
