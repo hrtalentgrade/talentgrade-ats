@@ -2105,6 +2105,54 @@ app.get('/api/dashboard/metrics', authenticateToken, async (req, res) => {
 // 11. REPORTS GENERATION DATA
 // ==========================================
 
+app.get('/api/reports/attendance', authenticateToken, requireRole(['Super Admin', 'Team Leader']), async (req, res) => {
+  const { role, team_id, id } = req.user;
+  const { start_date, end_date, user_id } = req.query;
+
+  try {
+    let query = `
+      SELECT a.*, u.full_name, u.employee_id, u.role as user_role, t.name as team_name
+      FROM attendance a
+      JOIN users u ON a.user_id = u.id
+      LEFT JOIN teams t ON u.team_id = t.id
+    `;
+    const params = [];
+    const conditions = [];
+
+    if (role === 'Team Leader') {
+      conditions.push(`(u.team_id = ? OR u.id = ?)`);
+      params.push(team_id, id);
+    }
+
+    if (user_id) {
+      conditions.push(`a.user_id = ?`);
+      params.push(user_id);
+    }
+
+    if (start_date) {
+      conditions.push(`a.attendance_date >= ?`);
+      params.push(start_date);
+    }
+
+    if (end_date) {
+      conditions.push(`a.attendance_date <= ?`);
+      params.push(end_date);
+    }
+
+    if (conditions.length > 0) {
+      query += ` WHERE ` + conditions.join(' AND ');
+    }
+
+    query += ` ORDER BY a.attendance_date DESC, a.punch_in_time DESC`;
+
+    const records = await all(query, params);
+    res.json({ report: records });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to retrieve attendance report' });
+  }
+});
+
 app.get('/api/reports/recruiter-performance', authenticateToken, requireRole(['Super Admin', 'Team Leader']), async (req, res) => {
   const { team_id, role } = req.user;
   try {

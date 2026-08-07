@@ -3716,18 +3716,43 @@ function VendorsView({ user, token }) {
 // REPORTS COMPONENT
 // ==========================================
 function ReportsView({ user, token }) {
-  const [reportType, setReportType] = useState('recruiter'); // recruiter vs vendor
+  const [reportType, setReportType] = useState('recruiter'); // recruiter vs vendor vs attendance
   const [reportData, setReportData] = useState([]);
+  const [employees, setEmployees] = useState([]);
+  const [selectedEmployee, setSelectedEmployee] = useState('');
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
+
+  useEffect(() => {
+    const fetchEmployees = async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/users`, {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        const data = await res.json();
+        setEmployees(data.users || []);
+      } catch (err) {
+        console.error(err);
+      }
+    };
+    fetchEmployees();
+  }, []);
 
   useEffect(() => {
     fetchReport();
-  }, [reportType]);
+  }, [reportType, selectedEmployee, startDate, endDate]);
 
   const fetchReport = async () => {
     try {
-      const endpoint = reportType === 'recruiter' 
-        ? `${API_BASE}/api/reports/recruiter-performance` 
-        : `${API_BASE}/api/reports/vendor-performance`;
+      let endpoint = '';
+      if (reportType === 'recruiter') {
+        endpoint = `${API_BASE}/api/reports/recruiter-performance`;
+      } else if (reportType === 'vendor') {
+        endpoint = `${API_BASE}/api/reports/vendor-performance`;
+      } else {
+        endpoint = `${API_BASE}/api/reports/attendance?user_id=${selectedEmployee}&start_date=${startDate}&end_date=${endDate}`;
+      }
+      
       const res = await fetch(endpoint, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
@@ -3746,9 +3771,23 @@ function ReportsView({ user, token }) {
     if (reportType === 'recruiter') {
       headers = ['Recruiter Name', 'Employee ID', 'Team', 'Sourced', 'Screening', 'Interviews', 'Offers', 'Joined', 'Tasks Completed', 'Total Tasks'];
       rows = reportData.map(r => [r.full_name, r.employee_id, r.team_name || 'None', r.sourced_count, r.screening_count, r.interview_count, r.offer_count, r.joined_count, r.tasks_completed, r.tasks_total]);
-    } else {
+    } else if (reportType === 'vendor') {
       headers = ['B2B Company', 'POC Name', 'Email', 'Sourcing Domain', 'Candidates Submitted', 'Joined Count', 'Conversion Rate %'];
       rows = reportData.map(v => [v.company_name, v.poc_name, v.email, v.specialization, v.submitted, v.joined, `${v.conversion_rate}%`]);
+    } else {
+      headers = ['Employee Name', 'Employee ID', 'Role', 'Team', 'Date', 'Punch In', 'Punch Out', 'Hours Worked', 'Device Details', 'Status'];
+      rows = reportData.map(r => [
+        r.full_name,
+        r.employee_id,
+        r.user_role,
+        r.team_name || 'None',
+        r.attendance_date,
+        r.punch_in_time ? new Date(r.punch_in_time).toLocaleTimeString() : '-',
+        r.punch_out_time ? new Date(r.punch_out_time).toLocaleTimeString() : '-',
+        r.working_hours || '-',
+        `${r.punch_in_browser || '-'} (${r.punch_in_device || '-'})`,
+        r.is_late === 1 ? 'Late' : 'On-Time'
+      ]);
     }
 
     const csvContent = [
@@ -3800,14 +3839,47 @@ function ReportsView({ user, token }) {
           >
             B2B Partner Metrics
           </button>
+          <button 
+            className="btn" 
+            style={{ backgroundColor: reportType === 'attendance' ? 'var(--primary-light)' : 'transparent', color: reportType === 'attendance' ? 'var(--primary)' : 'var(--text-muted)', border: '1px solid var(--border-color)' }}
+            onClick={() => setReportType('attendance')}
+          >
+            Attendance Logs
+          </button>
         </div>
       </div>
+
+      {/* ATTENDANCE SPECIFIC DATE FILTERS */}
+      {reportType === 'attendance' && (
+        <div className="card" style={{ padding: '16px', display: 'flex', gap: '16px', alignItems: 'center', flexWrap: 'wrap', marginBottom: '24px' }}>
+          <div>
+            <label style={{ fontSize: '11px', fontWeight: 'bold', color: 'var(--text-muted)', display: 'block', marginBottom: '4px' }}>Filter Recruiter</label>
+            <select className="form-control" style={{ width: '200px' }} value={selectedEmployee} onChange={(e) => setSelectedEmployee(e.target.value)}>
+              <option value="">All Employees</option>
+              {employees.map(emp => (
+                <option key={emp.id} value={emp.id}>{emp.full_name} ({emp.role})</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label style={{ fontSize: '11px', fontWeight: 'bold', color: 'var(--text-muted)', display: 'block', marginBottom: '4px' }}>Start Date</label>
+            <input type="date" className="form-control" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
+          </div>
+          <div>
+            <label style={{ fontSize: '11px', fontWeight: 'bold', color: 'var(--text-muted)', display: 'block', marginBottom: '4px' }}>End Date</label>
+            <input type="date" className="form-control" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
+          </div>
+          <div style={{ alignSelf: 'flex-end' }}>
+            <button className="btn btn-secondary" onClick={() => { setStartDate(''); setEndDate(''); setSelectedEmployee(''); }}>Clear Filters</button>
+          </div>
+        </div>
+      )}
 
       {/* REPORT CONTENT TABLE */}
       <div className="card">
         <div className="card-header">
           <span className="card-title">
-            {reportType === 'recruiter' ? 'Sourcing Recruiter Performance Matrix' : 'B2B Partner Performance Scorecard'}
+            {reportType === 'recruiter' ? 'Sourcing Recruiter Performance Matrix' : reportType === 'vendor' ? 'B2B Partner Performance Scorecard' : 'Collective Attendance Log History'}
           </span>
         </div>
         <div className="table-container">
@@ -3843,7 +3915,7 @@ function ReportsView({ user, token }) {
                 ))}
               </tbody>
             </table>
-          ) : (
+          ) : reportType === 'vendor' ? (
             <table className="tg-table">
               <thead>
                 <tr>
@@ -3867,6 +3939,47 @@ function ReportsView({ user, token }) {
                     <td>{row.joined}</td>
                     <td>
                       <strong style={{ color: 'var(--success)' }}>{row.conversion_rate}%</strong>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : (
+            <table className="tg-table">
+              <thead>
+                <tr>
+                  <th>Employee</th>
+                  <th>Team</th>
+                  <th>Date</th>
+                  <th>Punch In</th>
+                  <th>Punch Out</th>
+                  <th>Hours</th>
+                  <th>IP / Browser Info</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {reportData.map(row => (
+                  <tr key={row.id}>
+                    <td>
+                      <div style={{ fontWeight: '600' }}>{row.full_name}</div>
+                      <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{row.user_role} • {row.employee_id}</div>
+                    </td>
+                    <td>{row.team_name || '-'}</td>
+                    <td>{row.attendance_date}</td>
+                    <td>{row.punch_in_time ? new Date(row.punch_in_time).toLocaleTimeString() : '-'}</td>
+                    <td>{row.punch_out_time ? new Date(row.punch_out_time).toLocaleTimeString() : 'Active'}</td>
+                    <td>{row.working_hours ? `${row.working_hours} hrs` : '-'}</td>
+                    <td style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                      IP: {row.punch_in_ip || '-'}<br/>
+                      {row.punch_in_browser || '-'}
+                    </td>
+                    <td>
+                      {row.is_late === 1 ? (
+                        <span className="badge badge-danger">Late</span>
+                      ) : (
+                        <span className="badge badge-success">On-Time</span>
+                      )}
                     </td>
                   </tr>
                 ))}
