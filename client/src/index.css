@@ -484,15 +484,17 @@ button, input, select, textarea {
 
 /* Clean Enterprise Tables */
 .table-container {
-  overflow-x: auto;
+  overflow: auto;
+  max-height: 450px;
   width: 100%;
-  padding-bottom: 8px;
+  padding-bottom: 16px;
 }
 
 .tg-table {
   width: 100%;
   border-collapse: collapse;
   text-align: left;
+  margin-bottom: 16px;
 }
 
 .tg-table th {
