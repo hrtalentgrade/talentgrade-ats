@@ -1377,7 +1377,7 @@ app.post('/api/candidates', authenticateToken, async (req, res) => {
 // Candidates fetch list (RBAC scoped)
 app.get('/api/candidates', authenticateToken, async (req, res) => {
   const { role, team_id, id } = req.user;
-  const { vacancy_id, search, pipeline_status } = req.query;
+  const { vacancy_id, search, pipeline_status, recruiter_id } = req.query;
 
   try {
     let query = `
@@ -1407,6 +1407,11 @@ app.get('/api/candidates', authenticateToken, async (req, res) => {
     if (pipeline_status) {
       conditions.push(`c.pipeline_status = ?`);
       params.push(pipeline_status);
+    }
+
+    if (recruiter_id) {
+      conditions.push(`c.assigned_recruiter_id = ?`);
+      params.push(recruiter_id);
     }
 
     if (search) {

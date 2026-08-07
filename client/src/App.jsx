@@ -2441,6 +2441,8 @@ function CandidatesView({ user, token }) {
   // Sourcing filters
   const [search, setSearch] = useState('');
   const [selectedVacancyFilter, setSelectedVacancyFilter] = useState('');
+  const [recruiters, setRecruiters] = useState([]);
+  const [selectedRecruiterFilter, setSelectedRecruiterFilter] = useState('');
 
   // Resume uploading parsing states
   const [resumeFile, setResumeFile] = useState(null);
@@ -2541,9 +2543,27 @@ function CandidatesView({ user, token }) {
   };
 
   useEffect(() => {
+    if (user.role === 'Super Admin' || user.role === 'Team Leader') {
+      fetchRecruiters();
+    }
+  }, []);
+
+  const fetchRecruiters = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/users`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const data = await res.json();
+      setRecruiters(data.users || []);
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  useEffect(() => {
     fetchCandidates();
     fetchVacancies();
-  }, [selectedVacancyFilter, search]);
+  }, [selectedVacancyFilter, selectedRecruiterFilter, search]);
 
   const fetchCandidates = async () => {
     try {
@@ -2551,6 +2571,7 @@ function CandidatesView({ user, token }) {
       const url = new URL('/api/candidates', baseUrl);
       if (search) url.searchParams.append('search', search);
       if (selectedVacancyFilter) url.searchParams.append('vacancy_id', selectedVacancyFilter);
+      if (selectedRecruiterFilter) url.searchParams.append('recruiter_id', selectedRecruiterFilter);
       
       const res = await fetch(url, {
         headers: { 'Authorization': `Bearer ${token}` }
@@ -2846,6 +2867,16 @@ function CandidatesView({ user, token }) {
               ))}
             </select>
           </div>
+          {(user.role === 'Super Admin' || user.role === 'Team Leader') && (
+            <div style={{ width: '240px' }}>
+              <select className="form-control" value={selectedRecruiterFilter} onChange={(e) => setSelectedRecruiterFilter(e.target.value)}>
+                <option value="">All Recruiters</option>
+                {recruiters.map(r => (
+                  <option key={r.id} value={r.id}>{r.full_name} ({r.role})</option>
+                ))}
+              </select>
+            </div>
+          )}
         </div>
       </div>
 
@@ -2899,6 +2930,9 @@ function CandidatesView({ user, token }) {
                           <span>Exp: {cand.experience_years} yrs</span>
                           <span>{cand.location || 'Unknown'}</span>
                         </div>
+                        <div className="pipeline-card-meta" style={{ marginTop: '6px', borderTop: '1px solid var(--border-color)', paddingTop: '4px', fontSize: '9px', color: 'var(--text-muted)' }}>
+                          Sourced by: <strong>{cand.recruiter_name || 'System / Admin'}</strong>
+                        </div>
                       </div>
                     ))
                   )}
@@ -2920,6 +2954,7 @@ function CandidatesView({ user, token }) {
                   <th>Skills keywords</th>
                   <th>Location</th>
                   <th>Notice Period</th>
+                  <th>Sourced By</th>
                   <th>Pipeline Status</th>
                   <th>Actions</th>
                 </tr>
@@ -2936,6 +2971,9 @@ function CandidatesView({ user, token }) {
                     <td style={{ maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={c.skills}>{c.skills || '-'}</td>
                     <td>{c.location || '-'}</td>
                     <td>{c.notice_period_days} days</td>
+                    <td>
+                      <strong style={{ fontSize: '12px' }}>{c.recruiter_name || 'System / Admin'}</strong>
+                    </td>
                     <td>
                       <span className={`badge badge-pipeline-${c.pipeline_status.toLowerCase()}`}>{c.pipeline_status}</span>
                     </td>
