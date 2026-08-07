@@ -593,14 +593,27 @@ app.post('/api/teams/:id/add-member', authenticateToken, requireRole(['Super Adm
 // 3.5 USER MANAGEMENT ENDPOINTS (ADMIN ONLY)
 // ==========================================
 
-app.get('/api/users', authenticateToken, requireRole(['Super Admin']), async (req, res) => {
+app.get('/api/users', authenticateToken, requireRole(['Super Admin', 'Team Leader']), async (req, res) => {
+  const { role, team_id, id } = req.user;
   try {
-    const list = await all(`
-      SELECT u.id, u.employee_id, u.email, u.full_name, u.role, u.team_id, t.name as team_name
-      FROM users u
-      LEFT JOIN teams t ON u.team_id = t.id
-      ORDER BY u.id DESC
-    `);
+    let list = [];
+    if (role === 'Super Admin') {
+      list = await all(`
+        SELECT u.id, u.employee_id, u.email, u.full_name, u.role, u.team_id, t.name as team_name
+        FROM users u
+        LEFT JOIN teams t ON u.team_id = t.id
+        ORDER BY u.full_name ASC
+      `);
+    } else {
+      // Team Leader: list team members plus themselves
+      list = await all(`
+        SELECT u.id, u.employee_id, u.email, u.full_name, u.role, u.team_id, t.name as team_name
+        FROM users u
+        LEFT JOIN teams t ON u.team_id = t.id
+        WHERE u.team_id = ? OR u.id = ?
+        ORDER BY u.full_name ASC
+      `, [team_id, id]);
+    }
     res.json({ users: list });
   } catch (err) {
     console.error(err);
