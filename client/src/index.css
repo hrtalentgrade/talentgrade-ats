@@ -313,6 +313,11 @@ button, input, select, textarea {
   max-width: 1400px;
   width: 100%;
   margin: 0 auto;
+  min-height: 0;
+}
+
+.screen-container > * {
+  flex-shrink: 0;
 }
 
 /* Page Header */
