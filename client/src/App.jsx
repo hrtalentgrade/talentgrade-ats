@@ -755,7 +755,19 @@ function DashboardView({ user, token, setCurrentTab }) {
     }
   };
 
-  if (!metrics) return <div>Loading dashboard statistics...</div>;
+  if (!metrics) {
+    return <div style={{ display: 'flex', height: '100%', alignItems: 'center', justifyContent: 'center', padding: '40px', color: 'var(--text-muted)' }}>Loading dashboard statistics...</div>;
+  }
+
+  if (metrics.error || !metrics.candidatePipelineFunnel) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', height: '100%', alignItems: 'center', justifyContent: 'center', padding: '40px', textAlign: 'center' }}>
+        <h3 style={{ color: 'var(--danger)', marginBottom: '8px' }}>Unable to load dashboard metrics</h3>
+        <p style={{ color: 'var(--text-muted)', marginBottom: '16px' }}>{metrics.error || 'The backend returned an unexpected metrics format.'}</p>
+        <button className="btn btn-primary" onClick={fetchMetrics}>Retry Loading Statistics</button>
+      </div>
+    );
+  }
 
   // Custom SVG sourcing funnel builder
   const funnelStages = [

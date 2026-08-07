@@ -1894,7 +1894,7 @@ app.get('/api/dashboard/metrics', authenticateToken, async (req, res) => {
 
     if (role === 'Super Admin') {
       // 1. Vacancies
-      const vacs = await get('SELECT COUNT(*) as tot, SUM(CASE WHEN status="Open" THEN 1 ELSE 0 END) as opn FROM vacancies');
+      const vacs = await get("SELECT COUNT(*) as tot, SUM(CASE WHEN status='Open' THEN 1 ELSE 0 END) as opn FROM vacancies");
       totalVacancies = vacs.tot || 0;
       openVacancies = vacs.opn || 0;
 
@@ -1944,7 +1944,7 @@ app.get('/api/dashboard/metrics', authenticateToken, async (req, res) => {
       // 1. Vacancies
       const vacs = await get(`
         SELECT COUNT(DISTINCT v.id) as tot,
-               SUM(CASE WHEN v.status="Open" THEN 1 ELSE 0 END) as opn
+               SUM(CASE WHEN v.status='Open' THEN 1 ELSE 0 END) as opn
         FROM vacancies v
         LEFT JOIN vacancy_assignments va ON v.id = va.vacancy_id
         LEFT JOIN users u ON va.assigned_to = u.id
