@@ -1327,6 +1327,12 @@ app.post('/api/candidates', authenticateToken, async (req, res) => {
       return res.status(400).json({ error: `Duplicate candidate detected: Already exists as "${duplicate.name}"` });
     }
 
+    const parseNumber = (val, defaultVal = null) => {
+      if (val === undefined || val === null || String(val).trim() === '') return defaultVal;
+      const parsed = parseFloat(val);
+      return isNaN(parsed) ? defaultVal : parsed;
+    };
+
     const result = await run(`
       INSERT INTO candidates (
         name, email, phone, nationality, location, experience_years, skills,
@@ -1334,9 +1340,21 @@ app.post('/api/candidates', authenticateToken, async (req, res) => {
         resume_path, vacancy_id, assigned_recruiter_id, pipeline_status
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [
-      name, email, phone, nationality, location, experience_years || 0, skills,
-      current_salary, expected_salary, notice_period_days || 30, current_position,
-      resume_path, vacancy_id || null, req.user.id, pipeline_status || 'New'
+      name, 
+      email, 
+      phone, 
+      nationality || null, 
+      location || null, 
+      parseNumber(experience_years, 0), 
+      skills || null,
+      parseNumber(current_salary, null), 
+      parseNumber(expected_salary, null), 
+      parseNumber(notice_period_days, 30), 
+      current_position || null,
+      resume_path || null, 
+      vacancy_id || null, 
+      req.user.id, 
+      pipeline_status || 'New'
     ]);
 
     // Log timeline
