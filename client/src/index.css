@@ -486,6 +486,7 @@ button, input, select, textarea {
 .table-container {
   overflow-x: auto;
   width: 100%;
+  padding-bottom: 8px;
 }
 
 .tg-table {

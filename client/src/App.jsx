@@ -1275,7 +1275,7 @@ function AttendanceView({ user, token }) {
             <tbody>
               {history.map(row => (
                 <tr key={row.id}>
-                  <td>{row.attendance_date}</td>
+                  <td>{row.attendance_date ? row.attendance_date.split('T')[0] : '-'}</td>
                   <td>{new Date(row.punch_in_time).toLocaleTimeString()}</td>
                   <td>{row.punch_out_time ? new Date(row.punch_out_time).toLocaleTimeString() : '-'}</td>
                   <td>{row.working_hours ? `${row.working_hours} hrs` : '-'}</td>
@@ -1364,7 +1364,7 @@ function AttendanceView({ user, token }) {
                       <div style={{ fontWeight: '600' }}>{row.full_name}</div>
                       <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{row.user_role} • {row.employee_id}</div>
                     </td>
-                    <td>{row.attendance_date}</td>
+                    <td>{row.attendance_date ? row.attendance_date.split('T')[0] : '-'}</td>
                     <td>{new Date(row.punch_in_time).toLocaleTimeString()}</td>
                     <td>{row.punch_out_time ? new Date(row.punch_out_time).toLocaleTimeString() : 'Active'}</td>
                     <td>{row.working_hours ? `${row.working_hours} hrs` : '-'}</td>
@@ -3781,7 +3781,7 @@ function ReportsView({ user, token }) {
         r.employee_id,
         r.user_role,
         r.team_name || 'None',
-        r.attendance_date,
+        r.attendance_date ? r.attendance_date.split('T')[0] : '-',
         r.punch_in_time ? new Date(r.punch_in_time).toLocaleTimeString() : '-',
         r.punch_out_time ? new Date(r.punch_out_time).toLocaleTimeString() : '-',
         r.working_hours || '-',
@@ -3966,7 +3966,7 @@ function ReportsView({ user, token }) {
                       <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{row.user_role} • {row.employee_id}</div>
                     </td>
                     <td>{row.team_name || '-'}</td>
-                    <td>{row.attendance_date}</td>
+                    <td>{row.attendance_date ? row.attendance_date.split('T')[0] : '-'}</td>
                     <td>{row.punch_in_time ? new Date(row.punch_in_time).toLocaleTimeString() : '-'}</td>
                     <td>{row.punch_out_time ? new Date(row.punch_out_time).toLocaleTimeString() : 'Active'}</td>
                     <td>{row.working_hours ? `${row.working_hours} hrs` : '-'}</td>
