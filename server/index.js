@@ -282,16 +282,8 @@ app.post('/api/auth/punch-in', async (req, res) => {
     const { browser, device } = parseUserAgent(req.headers['user-agent']);
     const locationStr = latitude && longitude ? `${latitude}, ${longitude}` : 'Not Shared';
 
-    // Decode and save selfie image
-    let dbSelfiePath = 'Selfie Not Shared';
-    const matches = selfie.match(/^data:image\/([A-Za-z-+\/]+);base64,(.+)$/);
-    if (matches && matches.length === 3) {
-      const imageBuffer = Buffer.from(matches[2], 'base64');
-      const filename = `selfie_login_${user.id}_${Date.now()}.jpg`;
-      const filePath = path.join(selfiesDir, filename);
-      fs.writeFileSync(filePath, imageBuffer);
-      dbSelfiePath = `/uploads/selfies/${filename}`;
-    }
+    // Save base64 selfie directly to database to avoid ephemeral disk loss
+    let dbSelfiePath = selfie || 'Selfie Not Shared';
 
     await run(`
       INSERT INTO attendance (
@@ -354,18 +346,8 @@ app.post('/api/attendance/punch-in', authenticateToken, async (req, res) => {
       return res.status(400).json({ error: 'Already punched in for today' });
     }
 
-    // Decode and save selfie image
-    const matches = selfie.match(/^data:image\/([A-Za-z-+\/]+);base64,(.+)$/);
-    if (!matches || matches.length !== 3) {
-      return res.status(400).json({ error: 'Invalid selfie image data format' });
-    }
-
-    const imageBuffer = Buffer.from(matches[2], 'base64');
-    const filename = `selfie_${req.user.id}_${Date.now()}.jpg`;
-    const filePath = path.join(selfiesDir, filename);
-
-    fs.writeFileSync(filePath, imageBuffer);
-    const dbSelfiePath = `/uploads/selfies/${filename}`;
+    // Save base64 selfie directly to database to avoid ephemeral disk loss
+    const dbSelfiePath = selfie;
     const locationStr = latitude && longitude ? `${latitude}, ${longitude}` : 'Not Shared';
 
     const result = await run(`

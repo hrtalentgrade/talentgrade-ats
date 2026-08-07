@@ -1280,12 +1280,16 @@ function AttendanceView({ user, token }) {
                   <td>{row.punch_out_time ? new Date(row.punch_out_time).toLocaleTimeString() : '-'}</td>
                   <td>{row.working_hours ? `${row.working_hours} hrs` : '-'}</td>
                   <td>
-                    <img 
-                      src={`${API_BASE}${row.punch_in_selfie_path}`} 
-                      style={{ width: '40px', height: '40px', borderRadius: '4px', objectFit: 'cover', cursor: 'pointer' }}
-                      alt="selfie" 
-                      onClick={() => window.open(`${API_BASE}${row.punch_in_selfie_path}`, '_blank')}
-                    />
+                    {row.punch_in_selfie_path && row.punch_in_selfie_path !== 'Selfie Not Shared' && !row.punch_in_selfie_path.startsWith('Selfie Not') ? (
+                      <img 
+                        src={row.punch_in_selfie_path.startsWith('data:image/') ? row.punch_in_selfie_path : `${API_BASE}${row.punch_in_selfie_path}`} 
+                        style={{ width: '40px', height: '40px', borderRadius: '4px', objectFit: 'cover', cursor: 'pointer' }}
+                        alt="selfie" 
+                        onClick={() => window.open(row.punch_in_selfie_path.startsWith('data:image/') ? row.punch_in_selfie_path : `${API_BASE}${row.punch_in_selfie_path}`, '_blank')}
+                      />
+                    ) : (
+                      <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>No Photo</span>
+                    )}
                   </td>
                   <td style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
                     <div>IP: {row.punch_ip || 'Captured'}</div>
@@ -1371,10 +1375,10 @@ function AttendanceView({ user, token }) {
                     <td>
                       {row.punch_in_selfie_path && row.punch_in_selfie_path !== 'Selfie Not Shared' && !row.punch_in_selfie_path.startsWith('Selfie Not') ? (
                         <img 
-                          src={`${API_BASE}${row.punch_in_selfie_path}`} 
+                          src={row.punch_in_selfie_path.startsWith('data:image/') ? row.punch_in_selfie_path : `${API_BASE}${row.punch_in_selfie_path}`} 
                           style={{ width: '40px', height: '40px', borderRadius: '4px', objectFit: 'cover', cursor: 'pointer' }}
                           alt="selfie" 
-                          onClick={() => window.open(`${API_BASE}${row.punch_in_selfie_path}`, '_blank')}
+                          onClick={() => window.open(row.punch_in_selfie_path.startsWith('data:image/') ? row.punch_in_selfie_path : `${API_BASE}${row.punch_in_selfie_path}`, '_blank')}
                         />
                       ) : (
                         <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>No Photo</span>

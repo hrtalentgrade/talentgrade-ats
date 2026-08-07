@@ -223,6 +223,13 @@ export const initDb = async () => {
       // Ignored if constraint already exists
     }
 
+    // Ensure punch_in_selfie_path is TEXT for base64 storage support
+    try {
+      await run(`ALTER TABLE attendance ALTER COLUMN punch_in_selfie_path TYPE TEXT`);
+    } catch (e) {
+      // Ignored if column type is already text or if sqlite
+    }
+
     // 3. Vacancies Table
     await run(`
       CREATE TABLE IF NOT EXISTS vacancies (
@@ -301,7 +308,7 @@ export const initDb = async () => {
         attendance_date DATE NOT NULL,
         punch_in_time TIMESTAMP NOT NULL,
         punch_out_time TIMESTAMP,
-        punch_in_selfie_path VARCHAR(255),
+        punch_in_selfie_path TEXT,
         punch_in_ip VARCHAR(50),
         punch_in_browser VARCHAR(255),
         punch_in_device VARCHAR(255),
